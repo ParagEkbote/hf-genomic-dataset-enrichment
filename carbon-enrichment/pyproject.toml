@@ -1,0 +1,101 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+
+[project]
+name = "carbon-enrichment"
+version = "0.1.0"
+description = "A heterogeneous CPU/GPU-disaggregated data enrichment pipeline for the Carbon pretraining corpus."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Parag Ekbote" },
+]
+keywords = [
+    "dagster",
+    "hugging-face",
+    "datasets",
+    "bioinformatics",
+    "genomics",
+    "data-pipeline",
+    "data-enrichment",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+
+dependencies = [
+    # Orchestration
+    "dagster>=1.10",
+    "dagster-webserver>=1.10,<2.0",
+    "dagster-hf-datasets==0.2.0",
+
+    # Hugging Face datasets
+    "datasets>=3.0",
+    "huggingface-hub>=1.0.0",
+    "pyarrow>=15,<22",
+    "pandas>=2.2,<3.0",
+    # Configuration / validation
+    "pydantic>=2.8,<3.0",
+    "faceberg", #note: add the rest of the deps for post-processing
+]
+
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9.0",
+    "pytest-cov>=5.0,<8.0",
+    "ruff>=0.8,<1.0",
+    "mypy>=1.10,<2.0",
+]
+
+
+[project.scripts]
+carbon-enrichment = "carbon_enrichment.cli:main"
+
+
+[tool.hatch.build.targets.wheel]
+packages = ["carbon_enrichment"]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = [
+    "-ra",
+    "--strict-markers",
+]
+
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
