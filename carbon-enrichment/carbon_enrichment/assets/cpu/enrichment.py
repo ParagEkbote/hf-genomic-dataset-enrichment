@@ -78,6 +78,7 @@ import math
 from typing import Any
 
 import dagster as dg
+import numpy as np
 from datasets import Dataset
 
 # ============================================================================
@@ -164,113 +165,107 @@ _IUPAC_COMPLEMENT = str.maketrans(
     }
 )
 
+# Byte lookup for the hot sequence-processing loop.
+# Values 0..3 correspond to A/C/G/T and -1 means non-canonical.
+_BASE_CODE = [-1] * 256
+_BASE_CODE[ord("A")] = 0
+_BASE_CODE[ord("C")] = 1
+_BASE_CODE[ord("G")] = 2
+_BASE_CODE[ord("T")] = 3
+
 
 def _reverse_complement(sequence: str) -> str:
     """Return the IUPAC-aware reverse complement of a nucleotide sequence."""
-
     return sequence.translate(_IUPAC_COMPLEMENT)[::-1]
 
 
-def _gc_content(sequence: str) -> float:
-    """Calculate GC fraction among canonical A/C/G/T bases."""
+def _sequence_features(
+    sequence: str,
+) -> tuple[float, float, float, bool, list[float]]:
+    """Calculate composition, QC, and 3-mer features with NumPy.
 
+    Semantics intentionally match the original implementation:
+    - GC content uses only canonical A/C/G/T bases.
+    - GC skew uses canonical G/C counts.
+    - Shannon entropy uses canonical A/C/G/T counts.
+    - Any non-ACGT character marks the sequence as ambiguous.
+    - Only canonical 3-mers contribute to the 64-dimensional vector.
+    - K-mers crossing an ambiguous character are ignored.
+
+    NumPy is used for the high-volume nucleotide/k-mer operations. The
+    sequence is converted once to uint8 ASCII codes, mapped to 0..3 for
+    A/C/G/T, and the 3-mer indices are generated as vectorized integer
+    operations followed by ``np.bincount``.
+    """
     if not sequence:
-        return 0.0
+        return 0.0, 0.0, 0.0, False, [0.0] * KMER_VECTOR_SIZE
 
-    canonical = [
-        base
-        for base in sequence
-        if base in _BASES
-    ]
+    # ASCII conversion is substantially cheaper than constructing one Python
+    # string per k-mer. ``encode`` also preserves the existing ASCII-oriented
+    # semantics of the input corpus.
+    raw = np.frombuffer(sequence.encode("ascii", "replace"), dtype=np.uint8)
 
-    if not canonical:
-        return 0.0
+    # Map ASCII A/C/G/T to 0..3. All other bytes become -1.
+    codes = np.full(raw.shape, -1, dtype=np.int8)
+    codes[raw == 65] = 0   # A
+    codes[raw == 67] = 1   # C
+    codes[raw == 71] = 2   # G
+    codes[raw == 84] = 3   # T
 
-    gc = sum(
-        base in {"G", "C"}
-        for base in canonical
+    canonical = codes >= 0
+    ambiguous = bool(np.any(~canonical))
+
+    counts = np.bincount(
+        codes[canonical],
+        minlength=4,
+    ).astype(np.int64, copy=False)
+    canonical_count = int(counts.sum())
+
+    if canonical_count == 0:
+        gc_content = 0.0
+        entropy = 0.0
+    else:
+        gc_content = float((counts[1] + counts[2]) / canonical_count)
+
+        probabilities = counts[counts > 0] / canonical_count
+        entropy = float(-np.sum(probabilities * np.log2(probabilities)))
+
+    gc_count = int(counts[1] + counts[2])
+    gc_skew = (
+        float((counts[2] - counts[1]) / gc_count)
+        if gc_count
+        else 0.0
     )
 
-    return gc / len(canonical)
+    # Vectorized 3-mer encoding. A/C/G/T are represented by two bits, so the
+    # integer index is identical to the canonical ACGT lexicographic index.
+    if len(codes) < KMER_SIZE:
+        kmer_vector = [0.0] * KMER_VECTOR_SIZE
+    else:
+        valid = (
+            (codes[:-2] >= 0)
+            & (codes[1:-1] >= 0)
+            & (codes[2:] >= 0)
+        )
 
+        if np.any(valid):
+            first = codes[:-2][valid].astype(np.int16, copy=False)
+            second = codes[1:-1][valid].astype(np.int16, copy=False)
+            third = codes[2:][valid].astype(np.int16, copy=False)
 
-def _gc_skew(sequence: str) -> float:
-    """Calculate GC skew: (G-C)/(G+C).
+            kmer_indices = (first << 4) | (second << 2) | third
+            kmer_counts = np.bincount(
+                kmer_indices,
+                minlength=KMER_VECTOR_SIZE,
+            )
+            valid_kmers = int(kmer_indices.size)
+            kmer_vector = (
+                kmer_counts.astype(np.float64) / valid_kmers
+            ).tolist()
+        else:
+            kmer_vector = [0.0] * KMER_VECTOR_SIZE
 
-    Returns 0.0 when neither G nor C is present.
-    """
-
-    g = sequence.count("G")
-    c = sequence.count("C")
-
-    denominator = g + c
-
-    if denominator == 0:
-        return 0.0
-
-    return (g - c) / denominator
-
-
-def _shannon_entropy(sequence: str) -> float:
-    """Calculate Shannon entropy over canonical A/C/G/T bases."""
-
-    if not sequence:
-        return 0.0
-
-    counts = {
-        base: sequence.count(base)
-        for base in _BASES
-    }
-
-    total = sum(counts.values())
-
-    if total == 0:
-        return 0.0
-
-    entropy = 0.0
-
-    for count in counts.values():
-        if count == 0:
-            continue
-
-        probability = count / total
-        entropy -= probability * math.log2(probability)
-
-    return entropy
-
-
-def _kmer_frequency_vector(sequence: str) -> list[float]:
-    """Return a normalized 3-mer frequency vector of length 64.
-
-    Only canonical A/C/G/T k-mers contribute to the vector. K-mers containing
-    IUPAC ambiguity characters are ignored rather than assigned arbitrarily.
-    """
-
-    vector = [0.0] * KMER_VECTOR_SIZE
-
-    if len(sequence) < KMER_SIZE:
-        return vector
-
-    valid_kmers = 0
-
-    for index in range(len(sequence) - KMER_SIZE + 1):
-        kmer = sequence[index : index + KMER_SIZE]
-
-        kmer_index = _KMER_INDEX.get(kmer)
-
-        if kmer_index is None:
-            continue
-
-        vector[kmer_index] += 1.0
-        valid_kmers += 1
-
-    if valid_kmers:
-        vector = [
-            value / valid_kmers
-            for value in vector
-        ]
-
-    return vector
+    return gc_content, gc_skew, entropy, ambiguous, kmer_vector
 
 
 # ============================================================================
@@ -278,55 +273,33 @@ def _kmer_frequency_vector(sequence: str) -> list[float]:
 # ============================================================================
 
 
-def _split_taxonomy(value: Any) -> list[str]:
-    """Split a semicolon-delimited taxonomy lineage."""
-
-    if value is None:
-        return []
-
-    if not isinstance(value, str):
-        return []
-
-    return [
-        part.strip()
-        for part in value.split(";")
-        if part.strip()
-    ]
-
-
-def _taxonomy_features(
+def _append_taxonomy_features(
+    output: dict[str, list[Any]],
     taxonomy: Any,
-) -> dict[str, str | None]:
-    """Create fixed-width taxonomy columns."""
+) -> None:
+    """Split one lineage and append its fixed-width taxonomy representation."""
+    if isinstance(taxonomy, str):
+        ranks = [
+            part.strip()
+            for part in taxonomy.split(";")
+            if part.strip()
+        ]
+    else:
+        ranks = []
 
-    ranks = _split_taxonomy(taxonomy)
-
-    output: dict[str, str | None] = {
-        "taxonomy_domain": ranks[0] if ranks else None,
-    }
+    output["taxonomy_domain"].append(
+        ranks[0] if ranks else None
+    )
 
     for index in range(1, MAX_TAXONOMY_RANKS + 1):
-        output[f"taxonomy_rank_{index}"] = (
-            ranks[index]
-            if index < len(ranks)
-            else None
+        output[f"taxonomy_rank_{index}"].append(
+            ranks[index] if index < len(ranks) else None
         )
-
-    return output
 
 
 # ============================================================================
 # Quality utilities
 # ============================================================================
-
-
-def _has_ambiguous_bases(sequence: str) -> bool:
-    """Return True when a sequence contains IUPAC ambiguity characters."""
-
-    return any(
-        base not in _BASES
-        for base in sequence
-    )
 
 
 def _is_truncated(
@@ -340,12 +313,9 @@ def _is_truncated(
     a data-integrity signal rather than making a biological claim about
     truncation.
     """
-
-    if not sequence:
-        return True
-
     return (
-        begin_of_sequence != "<s>"
+        not sequence
+        or begin_of_sequence != "<s>"
         or end_of_sequence != "</s>"
     )
 
@@ -353,11 +323,11 @@ def _is_truncated(
 def _quality_flag(
     sequence: str,
     entropy: float,
+    ambiguous: bool,
     begin_of_sequence: Any,
     end_of_sequence: Any,
 ) -> str:
     """Assign the highest-priority applicable data-quality flag."""
-
     if _is_truncated(
         sequence,
         begin_of_sequence,
@@ -365,7 +335,7 @@ def _quality_flag(
     ):
         return "truncated"
 
-    if _has_ambiguous_bases(sequence):
+    if ambiguous:
         return "ambiguous_bases"
 
     if entropy < LOW_COMPLEXITY_ENTROPY_THRESHOLD:
@@ -383,13 +353,14 @@ def _enrich_batch(
     batch: dict[str, list[Any]],
 ) -> dict[str, list[Any]]:
     """Generate framework-derived features for one Dataset batch."""
-
     sequences = batch["sequence"]
     starts = batch["start"]
     ends = batch["end"]
     strands = batch["strand"]
     taxonomies = batch["taxonomy"]
     gene_types = batch["gene_type"]
+    begin_tokens = batch["begin_of_sequence"]
+    end_tokens = batch["end_of_sequence"]
 
     output: dict[str, list[Any]] = {
         "gc_content": [],
@@ -409,31 +380,41 @@ def _enrich_batch(
     output["is_coding_region"] = []
     output["qc_flag"] = []
 
-    for sequence, start, end, strand, taxonomy, gene_type in zip(
+    append = {key: value.append for key, value in output.items()}
+
+    for (
+        sequence,
+        start,
+        end,
+        strand,
+        taxonomy,
+        gene_type,
+        begin_token,
+        end_token,
+    ) in zip(
         sequences,
         starts,
         ends,
         strands,
         taxonomies,
         gene_types,
+        begin_tokens,
+        end_tokens,
     ):
         sequence = sequence or ""
 
-        gc = _gc_content(sequence)
-        skew = _gc_skew(sequence)
-        length = len(sequence)
-        entropy = _shannon_entropy(sequence)
-
-        gene_length = max(
-            int(end) - int(start),
-            0,
+        gc, skew, entropy, ambiguous, kmer_vector = _sequence_features(
+            sequence
         )
+
+        start_int = int(start)
+        end_int = int(end)
+        gene_length = max(end_int - start_int, 0)
 
         # The raw schema provides start/end but not the parent sequence
         # length. This is therefore a coordinate-relative proxy rather than
         # a true genome-relative position.
-        denominator = max(int(end), 1)
-        relative_position = int(start) / denominator
+        relative_position = start_int / max(end_int, 1)
 
         normalized_sequence = (
             _reverse_complement(sequence)
@@ -441,45 +422,44 @@ def _enrich_batch(
             else sequence
         )
 
-        taxonomy_values = _taxonomy_features(taxonomy)
+        append["gc_content"](gc)
+        append["gc_skew"](skew)
+        append["sequence_length"](len(sequence))
+        append["gene_length"](gene_length)
+        append["shannon_entropy"](entropy)
+        append["kmer_frequency_vector"](kmer_vector)
+        append["relative_gene_position"](relative_position)
+        append["strand_normalized_sequence"](normalized_sequence)
 
-        output["gc_content"].append(gc)
-        output["gc_skew"].append(skew)
-        output["sequence_length"].append(length)
-        output["gene_length"].append(gene_length)
-        output["shannon_entropy"].append(entropy)
-        output["kmer_frequency_vector"].append(
-            _kmer_frequency_vector(sequence)
-        )
-        output["relative_gene_position"].append(
-            relative_position
-        )
-        output["strand_normalized_sequence"].append(
-            normalized_sequence
-        )
-        output["taxonomy_domain"].append(
-            taxonomy_values["taxonomy_domain"]
+        if isinstance(taxonomy, str):
+            ranks = [
+                part.strip()
+                for part in taxonomy.split(";")
+                if part.strip()
+            ]
+        else:
+            ranks = []
+
+        append["taxonomy_domain"](
+            ranks[0] if ranks else None
         )
 
         for rank in range(1, MAX_TAXONOMY_RANKS + 1):
-            output[f"taxonomy_rank_{rank}"].append(
-                taxonomy_values[f"taxonomy_rank_{rank}"]
+            append[f"taxonomy_rank_{rank}"](
+                ranks[rank] if rank < len(ranks) else None
             )
 
-        output["is_coding_region"].append(
+        append["is_coding_region"](
             gene_type in CODING_GENE_TYPES
         )
 
-        output["qc_flag"].append(
+        append["qc_flag"](
             _quality_flag(
                 sequence,
                 entropy,
-                batch["begin_of_sequence"][
-                    len(output["qc_flag"])
-                ],
-                batch["end_of_sequence"][
-                    len(output["qc_flag"])
-                ],
+                ambiguous,
+                begin_token,
+                end_token,
             )
         )
 
