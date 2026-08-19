@@ -81,6 +81,8 @@ from typing import Any
 import dagster as dg
 from datasets import Dataset
 
+from carbon_enrichment.constants import KMER_SIZE, KMER_VECTOR_SIZE
+
 
 # ============================================================================
 # Configuration
