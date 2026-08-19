@@ -1,0 +1,4 @@
+ops:
+  carbon_raw_sequences:
+    config:
+      validation_level: dev

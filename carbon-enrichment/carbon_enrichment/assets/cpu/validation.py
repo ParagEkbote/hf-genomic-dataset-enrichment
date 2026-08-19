@@ -20,8 +20,6 @@ Scale note:
     usage bounded.
 """
 
-from __future__ import annotations
-
 import re
 
 import dagster as dg

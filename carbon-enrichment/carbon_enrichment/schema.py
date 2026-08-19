@@ -16,8 +16,6 @@ later enrichment stages. GPU assets should consume the validated dataset
 rather than redefine its raw-data assumptions.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 
