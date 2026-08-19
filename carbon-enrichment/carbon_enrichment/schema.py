@@ -5,15 +5,22 @@ This module is intentionally independent of Dagster assets and compute
 resources. It defines:
 
 1. Hugging Face dataset/configuration identifiers.
-2. The three validation tiers used by the development workflow.
+2. The validation tiers used by the development workflow.
 3. The expected raw Carbon dataset schema.
-4. Allowed categorical/token values.
+4. Allowed categorical/token values where the raw contract is established.
 5. Valid gene-boundary token pairs.
 6. The accepted IUPAC nucleotide alphabet.
+7. Structural taxonomy expectations.
+8. Coordinate expectations.
 
-The schema is shared by CPU ingestion/validation assets, tests, and
-later enrichment stages. GPU assets should consume the validated dataset
-rather than redefine its raw-data assumptions.
+Important design principle
+--------------------------
+The raw dataset contract is lossless. This module must not impose
+arbitrary truncation or fixed-width representations on variable-length
+biological information such as taxonomy.
+
+Derived CPU features and GPU/model-derived features belong to their
+respective processing modules rather than the raw-data contract.
 """
 
 from typing import Final
@@ -36,17 +43,20 @@ HF_DATASET_SPLIT: Final[str] = "train"
 # 2. Validation tiers
 # ============================================================================
 #
-# These are intentionally centralized so every stage of the pipeline uses
-# the same development/integration/authentication scale definitions.
+# These define the development workflow.
 #
 # dev:
-#     Fast feedback during implementation.
+#     Fast development feedback.
 #
 # integration:
-#     Main development/integration run.
+#     Larger integration-scale execution.
 #
 # auth:
-#     Expensive pre-release authentication run.
+#     Pre-release / authentication-scale execution.
+#
+# The actual streaming behavior is controlled by IngestionConfig. The
+# validation level identifies the intended scale; it does not itself imply
+# that the dataset must be materialized.
 # ============================================================================
 
 VALIDATION_LEVEL_SPLITS: Final[dict[str, str]] = {
@@ -68,12 +78,11 @@ VALIDATION_LEVELS: Final[tuple[str, ...]] = (
 # 3. Expected raw dataset schema
 # ============================================================================
 #
-# The Carbon eukaryote_generator configuration is expected to expose these
-# 14 columns.
+# The Carbon eukaryote_generator configuration exposes these 14 raw columns.
 #
 # These definitions describe the RAW dataset only.
-# Derived CPU features and GPU/model-derived features are defined by the
-# corresponding enrichment assets rather than being added here.
+#
+# No derived feature is added here.
 # ============================================================================
 
 EXPECTED_COLUMNS: Final[dict[str, str]] = {
@@ -104,9 +113,7 @@ EXPECTED_COLUMN_COUNT: Final[int] = len(EXPECTED_COLUMNS)
 # 4. Required fields
 # ============================================================================
 #
-# These are the fields that downstream processing fundamentally depends on.
-# A missing/null value here is more consequential than a general metadata
-# anomaly.
+# These fields are required for downstream CPU enrichment.
 # ============================================================================
 
 REQUIRED_FIELDS: Final[tuple[str, ...]] = (
@@ -123,18 +130,43 @@ REQUIRED_FIELDS: Final[tuple[str, ...]] = (
 # 5. Valid categorical/token vocabularies
 # ============================================================================
 #
-# These describe values observed/expected in categorical fields of the raw
-# corpus. They are used by CPU validation checks.
+# These are contracts for categorical fields whose representations are
+# established by the Carbon dataset.
+#
+# gene_type is intentionally NOT included here yet. The dataset exposes
+# multiple gene_type classes, but this module should not invent a complete
+# six-value vocabulary from a partial sample.
+#
+# Validation of gene_type therefore focuses on field presence/type and
+# non-nullness where appropriate until the complete vocabulary has been
+# explicitly established.
 # ============================================================================
 
 VALID_SEQUENCE_TOKENS: Final[dict[str, frozenset[str]]] = {
     "begin_of_sequence": frozenset({"<s>"}),
     "end_of_sequence": frozenset({"</s>"}),
-    "begin_of_gene": frozenset({"<bog>", "<bok>"}),
-    "end_of_gene": frozenset({"<eog>", "<eok>"}),
-    "strand": frozenset({"<+>", "<->"}),
-    "molecule_type": frozenset({"DNA", "RNA"}),
-    "topology": frozenset({"linear", "circular"}),
+    "begin_of_gene": frozenset({
+        "<bog>",
+        "<bok>",
+    }),
+    "end_of_gene": frozenset({
+        "<eog>",
+        "<eok>",
+    }),
+    "species_type": frozenset({
+        "<fng>",
+    }),
+    "strand": frozenset({
+        "<+>",
+        "<->",
+    }),
+    "molecule_type": frozenset({
+        "DNA",
+    }),
+    "topology": frozenset({
+        "linear",
+        "circular",
+    }),
 }
 
 
@@ -147,8 +179,8 @@ VALID_SEQUENCE_TOKENS: Final[dict[str, frozenset[str]]] = {
 #     <bog> -> <eog>
 #     <bok> -> <eok>
 #
-# The CPU validation layer reports unexpected combinations but does not
-# necessarily treat them as corruption during development.
+# Validation should reject/report unexpected combinations rather than
+# assuming that every gene uses the same boundary family.
 # ============================================================================
 
 GENE_BOUNDARY_PAIRS: Final[tuple[tuple[str, str], ...]] = (
@@ -170,9 +202,8 @@ GENE_BOUNDARY_PAIRS: Final[tuple[tuple[str, str], ...]] = (
 # Gap:
 #     -
 #
-# Sequences containing only A/C/G/T are tracked separately as "clean ACGT".
-# A sequence containing an accepted ambiguity code is still valid, but is
-# not classified as clean ACGT.
+# Accepted ambiguity codes remain valid sequence characters. They are
+# tracked separately by enrichment/QC rather than being discarded.
 # ============================================================================
 
 IUPAC_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset(
@@ -186,6 +217,25 @@ CLEAN_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset(
 
 # ============================================================================
 # 8. Taxonomy expectations
+# ============================================================================
+#
+# Taxonomy is variable-depth biological information.
+#
+# IMPORTANT:
+#     Do NOT define MAX_TAXONOMY_RANKS.
+#
+# The complete taxonomy string must remain intact. Enrichment may derive:
+#
+#     taxonomy_domain
+#     taxonomy_depth
+#
+# without truncating the original taxonomy.
+#
+# Example:
+#
+#     Eukaryota;Fungi;Dikarya;...;Agaricaceae;Agaricus
+#
+# remains completely intact in `taxonomy`.
 # ============================================================================
 
 KNOWN_TAXONOMY_ROOTS: Final[frozenset[str]] = frozenset(

@@ -1,30 +1,25 @@
 """
-M1 — Data foundation: schema validation + quality checks.
+M2 — Streaming validation and quality checks for the Carbon pipeline.
 
-These checks are attached to the `carbon_raw_sequences` Dagster asset rather
-than being separate milestone gates. They run automatically whenever the
-asset is materialized.
+Validation is performed incrementally on bounded batches.
 
-Only `check_raw_schema` is blocking. A schema break means downstream data
-cannot be trusted. Other checks are treated as quality signals during
-development so that minor corpus anomalies do not unnecessarily interrupt
-the development loop.
+This module:
 
-Scale note:
-    These checks materialize the current batch to pandas for vectorized
-    validation. This is appropriate for the dev (100 rows) and integration
-    (1%) validation tiers.
+- never calls Dataset.to_pandas();
+- never calls Dataset.filter();
+- never calls Dataset.map();
+- never materializes the complete Carbon corpus;
+- performs the blocking schema check separately;
+- accumulates diagnostic quality statistics across batches.
 
-    Before the 25% authentication run, replace pandas-based full-batch
-    validation with batched Dataset.map/filter reductions to keep memory
-    usage bounded.
+The raw taxonomy and biological sequence information are never truncated.
 """
 
-import re
+from dataclasses import dataclass, field
+from typing import Any, Mapping
 
 import dagster as dg
 
-from carbon_enrichment.assets.cpu.ingest import carbon_raw_sequences
 from carbon_enrichment.schema import (
     EXPECTED_COLUMNS,
     GENE_BOUNDARY_PAIRS,
@@ -35,339 +30,608 @@ from carbon_enrichment.schema import (
 )
 
 
-_CLEAN_ACGT_RE = re.compile(r"^[ACGT]+$")
-
-
 # ============================================================================
-# 1. Raw schema
+# Validation statistics
 # ============================================================================
 
 
-@dg.asset_check(asset=carbon_raw_sequences, blocking=True)
-def check_raw_schema(
-    context: dg.AssetCheckExecutionContext,
-    carbon_raw_sequences,
-) -> dg.AssetCheckResult:
-    """Verify that the raw dataset contains exactly the expected columns."""
+@dataclass
+class ValidationStats:
+    """Incremental validation counters for one streaming execution."""
 
-    actual_columns = set(carbon_raw_sequences.column_names)
+    rows_checked: int = 0
+
+    # ------------------------------------------------------------------------
+    # Token/category validation
+    # ------------------------------------------------------------------------
+
+    token_violations: dict[str, int] = field(
+        default_factory=dict
+    )
+
+    # ------------------------------------------------------------------------
+    # Gene boundaries
+    # ------------------------------------------------------------------------
+
+    boundary_pair_distribution: dict[str, int] = field(
+        default_factory=dict
+    )
+
+    mismatched_boundary_pairs: int = 0
+
+    # ------------------------------------------------------------------------
+    # Sequence validation
+    # ------------------------------------------------------------------------
+
+    empty_sequences: int = 0
+
+    clean_acgt_only: int = 0
+
+    invalid_alphabet_rows: int = 0
+
+    min_sequence_length: int | None = None
+
+    max_sequence_length: int | None = None
+
+    total_sequence_length: int = 0
+
+    # ------------------------------------------------------------------------
+    # Coordinates
+    # ------------------------------------------------------------------------
+
+    negative_coordinate_rows: int = 0
+
+    start_gte_end_rows: int = 0
+
+    # ------------------------------------------------------------------------
+    # Taxonomy
+    # ------------------------------------------------------------------------
+
+    empty_taxonomy: int = 0
+
+    unknown_root_domain_rows: int = 0
+
+    thin_lineage_rows: int = 0
+
+    min_taxonomy_depth: int | None = None
+
+    max_taxonomy_depth: int | None = None
+
+    total_taxonomy_depth: int = 0
+
+    # ------------------------------------------------------------------------
+    # Required fields
+    # ------------------------------------------------------------------------
+
+    null_counts_by_column: dict[str, int] = field(
+        default_factory=dict
+    )
+
+    # =========================================================================
+    # Update
+    # =========================================================================
+
+    def update(
+        self,
+        batch: Mapping[str, list[Any]],
+    ) -> None:
+        """Validate one bounded batch and update cumulative counters."""
+
+        rows = _batch_length(batch)
+
+        if rows == 0:
+            return
+
+        self.rows_checked += rows
+
+        _validate_tokens(batch, self)
+        _validate_boundaries(batch, self)
+        _validate_sequences(batch, self)
+        _validate_coordinates(batch, self)
+        _validate_taxonomy(batch, self)
+        _validate_required_fields(batch, self)
+
+
+# ============================================================================
+# Schema validation
+# ============================================================================
+
+
+def validate_schema(
+    batch: Mapping[str, Any],
+) -> None:
+    """
+    Perform the blocking raw-schema check.
+
+    This checks the column contract only. It is intentionally called on the
+    first streamed batch rather than on every batch.
+    """
+
+    actual_columns = set(batch)
     expected_columns = set(EXPECTED_COLUMNS)
 
     missing = expected_columns - actual_columns
     unexpected = actual_columns - expected_columns
 
-    passed = not missing and not unexpected
-
-    return dg.AssetCheckResult(
-        passed=passed,
-        metadata={
-            "missing_columns": dg.MetadataValue.json(sorted(missing)),
-            "unexpected_columns": dg.MetadataValue.json(sorted(unexpected)),
-            "expected_column_count": len(expected_columns),
-            "actual_column_count": len(actual_columns),
-        },
-        description=(
-            "All expected columns are present with no unexpected columns."
-            if passed
-            else (
-                "Schema mismatch: "
-                f"missing={sorted(missing)}, "
-                f"unexpected={sorted(unexpected)}"
-            )
-        ),
-    )
+    if missing or unexpected:
+        raise ValueError(
+            "Schema mismatch: "
+            f"missing={sorted(missing)}, "
+            f"unexpected={sorted(unexpected)}"
+        )
 
 
 # ============================================================================
-# 2. Categorical/token vocabulary
+# Batch validation
 # ============================================================================
 
 
-@dg.asset_check(asset=carbon_raw_sequences)
-def check_token_vocabularies(
-    context: dg.AssetCheckExecutionContext,
-    carbon_raw_sequences,
-) -> dg.AssetCheckResult:
-    """Verify that categorical/token columns contain recognized values."""
+def validate_batch(
+    batch: Mapping[str, list[Any]],
+    stats: ValidationStats | None = None,
+) -> ValidationStats:
+    """
+    Validate one normalized batch and update cumulative statistics.
 
-    df = carbon_raw_sequences.to_pandas()
-    violations: dict[str, int] = {}
-
-    for column, valid_values in VALID_SEQUENCE_TOKENS.items():
-        if column not in df.columns:
-            continue
-
-        bad = ~df[column].isin(valid_values)
-        n_bad = int(bad.sum())
-
-        if n_bad:
-            violations[column] = n_bad
-
-    passed = not violations
-
-    return dg.AssetCheckResult(
-        passed=passed,
-        metadata={
-            "rows_checked": len(df),
-            "violations_by_column": dg.MetadataValue.json(violations),
-        },
-        description=(
-            "All categorical/token columns contain recognized values."
-            if passed
-            else f"Unexpected token values found: {violations}"
-        ),
-    )
-
-
-# ============================================================================
-# 3. Gene boundary pairing
-# ============================================================================
-
-
-@dg.asset_check(asset=carbon_raw_sequences)
-def check_gene_boundary_pairing(
-    context: dg.AssetCheckExecutionContext,
-    carbon_raw_sequences,
-) -> dg.AssetCheckResult:
-    """Report gene-boundary token pairing for M2 triage.
-
-    The corpus contains two recognized boundary-token families:
-
-        <bog> -> <eog>
-        <bok> -> <eok>
-
-    Unexpected combinations are reported as diagnostic metadata rather than
-    treated as a hard failure during development. This allows M2 to determine
-    whether the observed record types should be split, filtered, or otherwise
-    handled.
+    Schema validation is deliberately separate and should be performed once
+    on the first raw batch using validate_schema().
     """
 
-    df = carbon_raw_sequences.to_pandas()
-    valid_pairs = set(GENE_BOUNDARY_PAIRS)
+    if stats is None:
+        stats = ValidationStats()
 
-    actual_pairs = list(
-        zip(
-            df["begin_of_gene"],
-            df["end_of_gene"],
-        )
+    stats.update(batch)
+
+    return stats
+
+
+# ============================================================================
+# Metadata
+# ============================================================================
+
+
+def validation_metadata(
+    stats: ValidationStats,
+) -> dict[str, Any]:
+    """Convert cumulative validation counters into Dagster metadata."""
+
+    total = stats.rows_checked
+
+    non_empty_sequences = (
+        total - stats.empty_sequences
     )
 
-    mismatched = [
-        pair for pair in actual_pairs if pair not in valid_pairs
-    ]
+    mean_sequence_length = (
+        stats.total_sequence_length / non_empty_sequences
+        if non_empty_sequences
+        else None
+    )
 
-    pair_counts: dict[str, int] = {}
+    clean_pct = (
+        100.0
+        * stats.clean_acgt_only
+        / max(non_empty_sequences, 1)
+        if non_empty_sequences
+        else 0.0
+    )
 
-    for pair in actual_pairs:
-        key = f"{pair[0]}/{pair[1]}"
-        pair_counts[key] = pair_counts.get(key, 0) + 1
+    mean_taxonomy_depth = (
+        stats.total_taxonomy_depth / total
+        if total
+        else None
+    )
 
-    # Intentionally non-blocking. The purpose of this check is to characterize
-    # the corpus and provide information for the downstream enrichment stage.
-    return dg.AssetCheckResult(
-        passed=True,
-        metadata={
-            "rows_checked": len(df),
-            "boundary_pair_distribution": dg.MetadataValue.json(pair_counts),
-            "mismatched_pair_count": len(mismatched),
-        },
-        description=(
-            "Boundary token pair distribution captured for M2 triage. "
-            f"{len(mismatched)} row(s) contain unexpected boundary pairs."
+    return {
+        "rows_checked": total,
+
+        "violations_by_column": dict(
+            stats.token_violations
         ),
-    )
 
-
-# ============================================================================
-# 4. Sequence alphabet
-# ============================================================================
-
-
-@dg.asset_check(asset=carbon_raw_sequences)
-def check_sequence_alphabet(
-    context: dg.AssetCheckExecutionContext,
-    carbon_raw_sequences,
-) -> dg.AssetCheckResult:
-    """Verify that sequences are non-empty and use the accepted IUPAC alphabet."""
-
-    df = carbon_raw_sequences.to_pandas()
-    seqs = df["sequence"].astype(str)
-
-    empty_mask = seqs.str.len() == 0
-    n_empty = int(empty_mask.sum())
-
-    non_empty = seqs[~empty_mask]
-
-    clean_acgt_mask = non_empty.str.match(_CLEAN_ACGT_RE)
-    n_clean = int(clean_acgt_mask.sum())
-
-    def _has_invalid_chars(sequence: str) -> bool:
-        return not set(sequence).issubset(IUPAC_NUCLEOTIDE_CHARS)
-
-    invalid_mask = non_empty.apply(_has_invalid_chars)
-    n_invalid = int(invalid_mask.sum())
-
-    passed = n_empty == 0 and n_invalid == 0
-
-    return dg.AssetCheckResult(
-        passed=passed,
-        metadata={
-            "rows_checked": len(df),
-            "empty_sequences": n_empty,
-            "clean_acgt_only": n_clean,
-            "clean_acgt_pct": round(
-                100 * n_clean / max(len(non_empty), 1),
-                2,
-            ),
-            "invalid_alphabet_rows": n_invalid,
-            "min_sequence_length": (
-                int(seqs.str.len().min()) if len(seqs) else None
-            ),
-            "max_sequence_length": (
-                int(seqs.str.len().max()) if len(seqs) else None
-            ),
-            "mean_sequence_length": (
-                round(float(seqs.str.len().mean()), 1)
-                if len(seqs)
-                else None
-            ),
-        },
-        description=(
-            "All sequences are non-empty and within the IUPAC nucleotide "
-            "alphabet."
-            if passed
-            else (
-                f"{n_empty} empty sequence(s), "
-                f"{n_invalid} row(s) with non-IUPAC characters."
-            )
+        "boundary_pair_distribution": dict(
+            stats.boundary_pair_distribution
         ),
-    )
 
-
-# ============================================================================
-# 5. Coordinates
-# ============================================================================
-
-
-@dg.asset_check(asset=carbon_raw_sequences)
-def check_coordinates(
-    context: dg.AssetCheckExecutionContext,
-    carbon_raw_sequences,
-) -> dg.AssetCheckResult:
-    """Verify non-negative genomic coordinates with start < end."""
-
-    df = carbon_raw_sequences.to_pandas()
-
-    negative = int(
-        ((df["start"] < 0) | (df["end"] < 0)).sum()
-    )
-
-    inverted = int(
-        (df["start"] >= df["end"]).sum()
-    )
-
-    passed = negative == 0 and inverted == 0
-
-    return dg.AssetCheckResult(
-        passed=passed,
-        metadata={
-            "rows_checked": len(df),
-            "negative_coordinate_rows": negative,
-            "start_gte_end_rows": inverted,
-        },
-        description=(
-            "All coordinates are non-negative with start < end."
-            if passed
-            else (
-                f"{negative} row(s) with negative coordinates, "
-                f"{inverted} row(s) with start >= end."
-            )
+        "mismatched_pair_count": (
+            stats.mismatched_boundary_pairs
         ),
-    )
 
-
-# ============================================================================
-# 6. Taxonomy format
-# ============================================================================
-
-
-@dg.asset_check(asset=carbon_raw_sequences)
-def check_taxonomy_format(
-    context: dg.AssetCheckExecutionContext,
-    carbon_raw_sequences,
-) -> dg.AssetCheckResult:
-    """Verify non-empty taxonomy rooted at a recognized domain."""
-
-    df = carbon_raw_sequences.to_pandas()
-    taxonomy = df["taxonomy"].astype(str)
-
-    empty = int((taxonomy.str.len() == 0).sum())
-
-    def _root_ok(value: str) -> bool:
-        root = value.split(";")[0]
-        return root in KNOWN_TAXONOMY_ROOTS
-
-    root_bad = int((~taxonomy.apply(_root_ok)).sum())
-
-    thin_lineage = int(
-        (taxonomy.str.count(";") < 1).sum()
-    )
-
-    passed = empty == 0 and root_bad == 0
-
-    return dg.AssetCheckResult(
-        passed=passed,
-        metadata={
-            "rows_checked": len(df),
-            "empty_taxonomy": empty,
-            "unknown_root_domain_rows": root_bad,
-            "thin_lineage_rows": thin_lineage,
-        },
-        description=(
-            "All taxonomy strings are non-empty and have a recognized "
-            "root domain."
-            if passed
-            else (
-                f"{empty} empty taxonomy value(s), "
-                f"{root_bad} row(s) with unrecognized root domain."
-            )
+        "empty_sequences": (
+            stats.empty_sequences
         ),
-    )
 
+        "clean_acgt_only": (
+            stats.clean_acgt_only
+        ),
 
-# ============================================================================
-# 7. Required-field completeness
-# ============================================================================
+        "clean_acgt_pct": round(
+            clean_pct,
+            2,
+        ),
 
+        "invalid_alphabet_rows": (
+            stats.invalid_alphabet_rows
+        ),
 
-@dg.asset_check(asset=carbon_raw_sequences)
-def check_required_field_completeness(
-    context: dg.AssetCheckExecutionContext,
-    carbon_raw_sequences,
-) -> dg.AssetCheckResult:
-    """Verify that required identifier and metadata fields contain no nulls."""
+        "min_sequence_length": (
+            stats.min_sequence_length
+        ),
 
-    df = carbon_raw_sequences.to_pandas()
+        "max_sequence_length": (
+            stats.max_sequence_length
+        ),
 
-    null_counts = {
-        column: int(df[column].isna().sum())
-        for column in REQUIRED_FIELDS
-        if column in df.columns
+        "mean_sequence_length": (
+            round(mean_sequence_length, 1)
+            if mean_sequence_length is not None
+            else None
+        ),
+
+        "negative_coordinate_rows": (
+            stats.negative_coordinate_rows
+        ),
+
+        "start_gte_end_rows": (
+            stats.start_gte_end_rows
+        ),
+
+        "empty_taxonomy": (
+            stats.empty_taxonomy
+        ),
+
+        "unknown_root_domain_rows": (
+            stats.unknown_root_domain_rows
+        ),
+
+        "thin_lineage_rows": (
+            stats.thin_lineage_rows
+        ),
+
+        "min_taxonomy_depth": (
+            stats.min_taxonomy_depth
+        ),
+
+        "max_taxonomy_depth": (
+            stats.max_taxonomy_depth
+        ),
+
+        "mean_taxonomy_depth": (
+            round(mean_taxonomy_depth, 2)
+            if mean_taxonomy_depth is not None
+            else None
+        ),
+
+        "null_counts_by_column": dict(
+            stats.null_counts_by_column
+        ),
+
+        "total_null_values": sum(
+            stats.null_counts_by_column.values()
+        ),
     }
 
-    total_nulls = sum(null_counts.values())
-    passed = total_nulls == 0
 
-    return dg.AssetCheckResult(
-        passed=passed,
-        metadata={
-            "rows_checked": len(df),
-            "null_counts_by_column": dg.MetadataValue.json(null_counts),
-            "total_null_values": total_nulls,
-        },
-        description=(
-            "No nulls found in required fields."
-            if passed
-            else f"Null values found: {null_counts}"
-        ),
+def add_validation_metadata(
+    context: dg.AssetExecutionContext,
+    stats: ValidationStats,
+) -> None:
+    """Attach cumulative validation results to a Dagster asset."""
+
+    context.add_output_metadata(
+        {
+            key: _to_metadata_value(value)
+            for key, value in validation_metadata(stats).items()
+        }
     )
+
+
+# ============================================================================
+# Token validation
+# ============================================================================
+
+
+def _validate_tokens(
+    batch: Mapping[str, list[Any]],
+    stats: ValidationStats,
+) -> None:
+    """
+    Validate established categorical/token contracts.
+
+    gene_type is intentionally not checked here because the complete
+    six-value vocabulary has not yet been established.
+    """
+
+    for column, valid_values in VALID_SEQUENCE_TOKENS.items():
+
+        if column not in batch:
+            continue
+
+        valid = set(valid_values)
+
+        for value in batch[column]:
+
+            if value not in valid:
+
+                stats.token_violations[column] = (
+                    stats.token_violations.get(
+                        column,
+                        0,
+                    )
+                    + 1
+                )
+
+
+# ============================================================================
+# Gene boundary validation
+# ============================================================================
+
+
+def _validate_boundaries(
+    batch: Mapping[str, list[Any]],
+    stats: ValidationStats,
+) -> None:
+
+    begins = batch.get(
+        "begin_of_gene",
+        [],
+    )
+
+    ends = batch.get(
+        "end_of_gene",
+        [],
+    )
+
+    valid_pairs = set(
+        GENE_BOUNDARY_PAIRS
+    )
+
+    for begin, end in zip(
+        begins,
+        ends,
+    ):
+
+        pair = (
+            begin,
+            end,
+        )
+
+        if pair not in valid_pairs:
+            stats.mismatched_boundary_pairs += 1
+
+        key = f"{begin}/{end}"
+
+        stats.boundary_pair_distribution[key] = (
+            stats.boundary_pair_distribution.get(
+                key,
+                0,
+            )
+            + 1
+        )
+
+
+# ============================================================================
+# Sequence validation
+# ============================================================================
+
+
+def _validate_sequences(
+    batch: Mapping[str, list[Any]],
+    stats: ValidationStats,
+) -> None:
+
+    for value in batch.get(
+        "sequence",
+        [],
+    ):
+
+        sequence = (
+            ""
+            if value is None
+            else str(value)
+        )
+
+        length = len(sequence)
+
+        if length == 0:
+            stats.empty_sequences += 1
+            continue
+
+        valid_alphabet = (
+            set(sequence).issubset(
+                IUPAC_NUCLEOTIDE_CHARS
+            )
+        )
+
+        if not valid_alphabet:
+            stats.invalid_alphabet_rows += 1
+
+        if _is_clean_acgt(sequence):
+            stats.clean_acgt_only += 1
+
+        stats.total_sequence_length += length
+
+        if (
+            stats.min_sequence_length is None
+            or length < stats.min_sequence_length
+        ):
+            stats.min_sequence_length = length
+
+        if (
+            stats.max_sequence_length is None
+            or length > stats.max_sequence_length
+        ):
+            stats.max_sequence_length = length
+
+
+def _is_clean_acgt(
+    sequence: str,
+) -> bool:
+
+    return all(
+        base in {
+            "A",
+            "C",
+            "G",
+            "T",
+        }
+        for base in sequence
+    )
+
+
+# ============================================================================
+# Coordinate validation
+# ============================================================================
+
+
+def _validate_coordinates(
+    batch: Mapping[str, list[Any]],
+    stats: ValidationStats,
+) -> None:
+
+    for start, end in zip(
+        batch.get("start", []),
+        batch.get("end", []),
+    ):
+
+        try:
+            start_value = float(start)
+            end_value = float(end)
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            stats.negative_coordinate_rows += 1
+
+            continue
+
+        if (
+            start_value < 0
+            or end_value < 0
+        ):
+            stats.negative_coordinate_rows += 1
+
+        if start_value >= end_value:
+            stats.start_gte_end_rows += 1
+
+
+# ============================================================================
+# Taxonomy validation
+# ============================================================================
+
+
+def _validate_taxonomy(
+    batch: Mapping[str, list[Any]],
+    stats: ValidationStats,
+) -> None:
+
+    for value in batch.get(
+        "taxonomy",
+        [],
+    ):
+
+        taxonomy = (
+            ""
+            if value is None
+            else str(value)
+        )
+
+        if not taxonomy:
+            stats.empty_taxonomy += 1
+            continue
+
+        levels = [
+            part.strip()
+            for part in taxonomy.split(";")
+            if part.strip()
+        ]
+
+        if not levels:
+            stats.empty_taxonomy += 1
+            continue
+
+        root = levels[0]
+
+        if root not in KNOWN_TAXONOMY_ROOTS:
+            stats.unknown_root_domain_rows += 1
+
+        depth = len(levels)
+
+        stats.total_taxonomy_depth += depth
+
+        if (
+            stats.min_taxonomy_depth is None
+            or depth < stats.min_taxonomy_depth
+        ):
+            stats.min_taxonomy_depth = depth
+
+        if (
+            stats.max_taxonomy_depth is None
+            or depth > stats.max_taxonomy_depth
+        ):
+            stats.max_taxonomy_depth = depth
+
+        if depth < 2:
+            stats.thin_lineage_rows += 1
+
+
+# ============================================================================
+# Required-field validation
+# ============================================================================
+
+
+def _validate_required_fields(
+    batch: Mapping[str, list[Any]],
+    stats: ValidationStats,
+) -> None:
+
+    for column in REQUIRED_FIELDS:
+
+        if column not in batch:
+            continue
+
+        count = sum(
+            value is None
+            for value in batch[column]
+        )
+
+        if count:
+
+            stats.null_counts_by_column[column] = (
+                stats.null_counts_by_column.get(
+                    column,
+                    0,
+                )
+                + count
+            )
+
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+
+def _batch_length(
+    batch: Mapping[str, Any],
+) -> int:
+
+    if not batch:
+        return 0
+
+    return len(
+        next(iter(batch.values()))
+    )
+
+
+def _to_metadata_value(
+    value: Any,
+) -> Any:
+
+    if isinstance(
+        value,
+        (dict, list),
+    ):
+        return dg.MetadataValue.json(value)
+
+    return value

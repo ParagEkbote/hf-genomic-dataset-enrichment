@@ -13,31 +13,66 @@ import dagster as dg
 from carbon_enrichment.schema import DEFAULT_VALIDATION_LEVEL
 
 
-class IngestionConfig(dg.Config):
-    """Runtime configuration for Carbon dataset ingestion."""
+# ============================================================================
+# Complete CPU pipeline configuration
+# ============================================================================
+
+
+class CarbonPipelineConfig(dg.Config):
+    """
+    Runtime configuration for the complete streaming Carbon CPU pipeline.
+
+    A single Dagster Config object is used deliberately. Parameters annotated
+    with separate dagster.Config classes are otherwise interpreted as asset
+    inputs rather than configuration by Dagster.
+    """
+
+    # ------------------------------------------------------------------------
+    # Dataset selection
+    # ------------------------------------------------------------------------
 
     validation_level: str = DEFAULT_VALIDATION_LEVEL
 
+    # The CPU pipeline is streaming-only.
+    streaming: bool = True
 
-class CPUProcessingConfig(dg.Config):
-    """Runtime configuration for CPU-side Dataset processing."""
+    # ------------------------------------------------------------------------
+    # Processing
+    # ------------------------------------------------------------------------
 
-    map_batch_size: int = 1_000
+    # Number of rows held in memory for one processing batch.
+    batch_size: int = 1_000
 
-    # Keep this at 1 initially.
-    #
-    # Increase only after benchmarking the CPU enrichment stages. Hugging Face
-    # Dataset.map() supports multiprocessing, but introducing it before the
-    # baseline is measured makes debugging and reproducibility harder.
-    num_proc: int = 1
+    # Number of processed rows written to one Parquet shard.
+    rows_per_shard: int = 250_000
+
+    # ------------------------------------------------------------------------
+    # Storage
+    # ------------------------------------------------------------------------
+
+    compression: str = "zstd"
+
+    output_dir: str = (
+        ".dagster_hf_storage/carbon_cpu_enriched_sequences"
+    )
+
+    # ------------------------------------------------------------------------
+    # Execution
+    # ------------------------------------------------------------------------
 
     enable_progress: bool = True
+
+
+# ============================================================================
+# Local storage configuration
+# ============================================================================
 
 
 class StorageConfig(dg.Config):
     """Local storage configuration for development runs."""
 
     hf_cache_dir: str = ".hf_cache"
+
     dagster_storage_dir: str = ".dagster_hf_storage"
 
     @property
@@ -53,5 +88,15 @@ class StorageConfig(dg.Config):
 # Project defaults
 # ============================================================================
 
-DEFAULT_MAP_BATCH_SIZE: int = 1_000
-DEFAULT_NUM_PROC: int = 1
+
+DEFAULT_STREAMING: bool = True
+
+DEFAULT_BATCH_SIZE: int = 1_000
+
+DEFAULT_ROWS_PER_SHARD: int = 250_000
+
+DEFAULT_PARQUET_COMPRESSION: str = "zstd"
+
+DEFAULT_OUTPUT_DIR: str = (
+    ".dagster_hf_storage/carbon_cpu_enriched_sequences"
+)
