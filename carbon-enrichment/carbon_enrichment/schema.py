@@ -54,15 +54,29 @@ HF_DATASET_SPLIT: Final[str] = "train"
 # auth:
 #     Pre-release / authentication-scale execution.
 #
-# The actual streaming behavior is controlled by IngestionConfig. The
-# validation level identifies the intended scale; it does not itself imply
-# that the dataset must be materialized.
+# Streaming does not support split-slicing syntax (e.g. "train[:100]") —
+# IterableDataset has no length to slice against, so the builder rejects
+# it as an invalid split name. Split selection and stream truncation are
+# therefore represented as two separate concerns:
+#
+#     STREAMING_SPLIT   -> which named HF split to open ("train")
+#     VALIDATION_LEVEL_ROWS -> how many examples to .take() from it
+#
+# This also makes each tier reproducible: it's tied to an explicit row
+# count rather than a split-expression that depends on dataset length.
 # ============================================================================
 
-VALIDATION_LEVEL_SPLITS: Final[dict[str, str]] = {
-    "dev": "train[:100]",
-    "integration": "train[:1%]",
-    "auth": "train[:25%]",
+STREAMING_SPLIT: Final[str] = "train"
+
+# NOTE: only "dev" and "auth" are backed by a measured/benchmarked row
+# count. Do not add "integration" here until its row count has actually
+# been measured against the dataset — guessing it via interpolation
+# (e.g. assuming exact proportionality to the 25% figure) would silently
+# encode an unverified number as a hard contract.
+VALIDATION_LEVEL_ROWS: Final[dict[str, int]] = {
+    "dev": 100,
+    "integration": 9_264_679,
+    "auth": 11_580_849,
 }
 
 DEFAULT_VALIDATION_LEVEL: Final[str] = "dev"
@@ -72,7 +86,6 @@ VALIDATION_LEVELS: Final[tuple[str, ...]] = (
     "integration",
     "auth",
 )
-
 
 # ============================================================================
 # 3. Expected raw dataset schema

@@ -10,6 +10,8 @@ from pathlib import Path
 
 import dagster as dg
 
+from typing import Literal
+
 from carbon_enrichment.schema import DEFAULT_VALIDATION_LEVEL
 
 
@@ -31,7 +33,7 @@ class CarbonPipelineConfig(dg.Config):
     # Dataset selection
     # ------------------------------------------------------------------------
 
-    validation_level: str = DEFAULT_VALIDATION_LEVEL
+    validation_level: Literal["dev", "integration", "auth"] = DEFAULT_VALIDATION_LEVEL
 
     # The CPU pipeline is streaming-only.
     streaming: bool = True

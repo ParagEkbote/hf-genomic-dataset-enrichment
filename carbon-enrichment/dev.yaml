@@ -1,10 +1,10 @@
 ops:
   carbon_cpu_enriched_sequences:
     config:
-      validation_level: dev
+      validation_level: integration
       streaming: true
       batch_size: 100
       rows_per_shard: 100
       compression: zstd
-      output_dir: ".dagster_hf_storage/test_100"
+      output_dir: ".dagster_hf_storage/test_100k"
       enable_progress: true

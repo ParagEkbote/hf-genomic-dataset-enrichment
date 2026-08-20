@@ -12,14 +12,12 @@ KMER_SIZE = 3
 KMER_VECTOR_SIZE = 4**KMER_SIZE
 LOW_COMPLEXITY_ENTROPY_THRESHOLD = 1.0
 
+# Only includes tokens actually observed in the Carbon corpus. Do not
+# silently map additional values (e.g. "CDS", "coding") to coding-region
+# status unless they have been confirmed present in the data.
 CODING_GENE_TYPES = frozenset({
-    "CDS",
-    "cds",
-    "coding",
-    "protein_coding",
+    "<cds>",
 })
-
-MAX_TAXONOMY_RANKS = 7
 
 _IUPAC_COMPLEMENT = str.maketrans({
     "A": "T", "T": "A", "C": "G", "G": "C", "N": "N",
@@ -142,7 +140,7 @@ def _quality_flag(
 def enrich_batch(
     batch: dict[str, list[Any]],
 ) -> dict[str, list[Any]]:
-    """Enrich one bounded batch of normalized Carbon rows."""
+    """Enrich one bounded batch while preserving all raw columns."""
     sequences = batch["sequence"]
     starts = batch["start"]
     ends = batch["end"]
@@ -152,25 +150,45 @@ def enrich_batch(
     begin_tokens = batch["begin_of_sequence"]
     end_tokens = batch["end_of_sequence"]
 
+    # Preserve every original Carbon column.
     output: dict[str, list[Any]] = {
-        "gc_content": [],
-        "gc_skew": [],
-        "sequence_length": [],
-        "gene_length": [],
-        "shannon_entropy": [],
-        "kmer_frequency_vector": [],
-        "relative_gene_position": [],
-        "strand_normalized_sequence": [],
-        "taxonomy_domain": [],
+        column: list(values)
+        for column, values in batch.items()
     }
 
-    for index in range(1, MAX_TAXONOMY_RANKS + 1):
-        output[f"taxonomy_rank_{index}"] = []
+    # Derived features.
+    output.update(
+        {
+            "gc_content": [],
+            "gc_skew": [],
+            "sequence_length": [],
+            "gene_length": [],
+            "shannon_entropy": [],
+            "kmer_frequency_vector": [],
+            "relative_gene_position": [],
+            "strand_normalized_sequence": [],
+            "taxonomy_domain": [],
+            "is_coding_region": [],
+            "qc_flag": [],
+        }
+    )
 
-    output["is_coding_region"] = []
-    output["qc_flag"] = []
-
-    append = {key: value.append for key, value in output.items()}
+    append = {
+        key: output[key].append
+        for key in (
+            "gc_content",
+            "gc_skew",
+            "sequence_length",
+            "gene_length",
+            "shannon_entropy",
+            "kmer_frequency_vector",
+            "relative_gene_position",
+            "strand_normalized_sequence",
+            "taxonomy_domain",
+            "is_coding_region",
+            "qc_flag",
+        )
+    }
 
     for (
         sequence,
@@ -229,11 +247,6 @@ def enrich_batch(
             ranks = []
 
         append["taxonomy_domain"](ranks[0] if ranks else None)
-
-        for rank in range(1, MAX_TAXONOMY_RANKS + 1):
-            append[f"taxonomy_rank_{rank}"](
-                ranks[rank] if rank < len(ranks) else None
-            )
 
         append["is_coding_region"](
             gene_type in CODING_GENE_TYPES
