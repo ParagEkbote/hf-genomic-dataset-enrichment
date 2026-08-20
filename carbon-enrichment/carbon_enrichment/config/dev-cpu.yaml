@@ -3,8 +3,9 @@ ops:
     config:
       validation_level: integration
       streaming: true
-      batch_size: 100
-      rows_per_shard: 100
+      batch_size: 5000
+      rows_per_shard: 50000
       compression: zstd
       output_dir: ".dagster_hf_storage/test_100k"
       enable_progress: true
+      cpu_workers: 7    # optional; omit to auto-default to cpu_count - 1

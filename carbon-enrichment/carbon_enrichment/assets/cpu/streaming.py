@@ -9,22 +9,40 @@ Processing flow:
           bounded batch
                 │
                 ▼
-          schema validation
+          schema validation (main process, first batch only)
                 │
                 ▼
-          normalization
+   ┌─── worker process (pool) ───┐
+   │  normalization               │
+   │       ↓                      │
+   │  validation (local stats)    │
+   │       ↓                      │
+   │  NumPy enrichment             │
+   └───────────────────────────────┘
                 │
                 ▼
-          validation
-                │
-                ▼
-          NumPy enrichment
-                │
-                ▼
-          Parquet shards
+          Parquet shards (main process)
 
 The complete Carbon corpus is never materialized as a Hugging Face Dataset,
 pandas DataFrame, or unbounded Python collection.
+
+PARALLEL EXECUTION
+-------------------
+Normalization, validation, and enrichment are CPU-bound, per-batch-pure
+operations with no shared state between batches. They are fused into a
+single `_process_batch` unit of work and submitted to a
+`ProcessPoolExecutor`, one call per batch. This keeps the previously
+sequential normalize -> validate -> enrich chain off the main process,
+which now only handles streaming iteration, submission, and Parquet I/O.
+
+In-flight futures are bounded (`inflight_limit`) so memory use stays
+proportional to `batch_size * n_workers`, preserving the bounded-memory
+streaming contract described above -- an unbounded queue of pending
+futures would otherwise defeat the point of streaming.
+
+Per-worker ValidationStats instances are merged in the main process via
+`merge_validation_stats()`, since dataclass mutation does not cross
+process boundaries.
 """
 
 
@@ -35,6 +53,9 @@ from typing import Any, Callable, Iterable, Iterator, Mapping
 import dagster as dg
 import pyarrow as pa
 import pyarrow.parquet as pq
+from concurrent.futures import ProcessPoolExecutor, Future
+import os
+
 from dagster_hf_datasets import HuggingFaceResource
 
 from carbon_enrichment.assets.cpu.enrichment import enrich_batch
@@ -43,7 +64,7 @@ from carbon_enrichment.assets.cpu.normalization import normalize_batch
 from carbon_enrichment.assets.cpu.validation import (
     ValidationStats,
     add_validation_metadata,
-    validate_batch,
+    merge_validation_stats,
     validate_schema,
 )
 from carbon_enrichment.config import CarbonPipelineConfig
@@ -166,6 +187,62 @@ def _validate_batch_column_lengths(
             "Batch columns have inconsistent lengths: "
             f"{lengths}"
         )
+
+
+# ============================================================================
+# Fused worker unit: normalize -> validate -> enrich
+# ============================================================================
+#
+# This function is the payload submitted to the process pool. It must be a
+# top-level, picklable function (no closures) since ProcessPoolExecutor
+# pickles the callable and its arguments to send to worker processes.
+#
+# Each call gets its own local ValidationStats -- never shared across
+# processes -- and returns it alongside the enriched batch so the parent
+# process can merge it with merge_validation_stats().
+
+
+def _process_batch(
+    raw_batch: Batch,
+) -> tuple[Batch, ValidationStats, int]:
+    """
+    Run normalization, validation, and enrichment for one batch.
+
+    Executed inside a worker process. Returns the enriched batch, a
+    worker-local ValidationStats, and the raw row count (for stats
+    bookkeeping in the parent process).
+    """
+
+    raw_rows = _batch_length(raw_batch)
+
+    normalized = normalize_batch(raw_batch)
+
+    normalized_rows = _batch_length(normalized)
+
+    if normalized_rows != raw_rows:
+        raise RuntimeError(
+            "Normalization changed the number of rows: "
+            f"input={raw_rows}, output={normalized_rows}"
+        )
+
+    _validate_batch_column_lengths(normalized)
+
+    local_stats = ValidationStats()
+    local_stats.update(normalized)
+
+    enriched = enrich_batch(normalized)
+
+    enriched_rows = _batch_length(enriched)
+
+    if enriched_rows != normalized_rows:
+        raise RuntimeError(
+            "Enrichment changed the number of rows: "
+            f"input={normalized_rows}, output={enriched_rows}"
+        )
+
+    _validate_batch_column_lengths(enriched)
+
+    return enriched, local_stats, raw_rows
 
 
 # ============================================================================
@@ -342,6 +419,7 @@ def process_stream(
     rows_per_shard: int,
     compression: str,
     context: dg.AssetExecutionContext | None = None,
+    max_workers: int | None = None,
 ) -> tuple[
     StreamingStats,
     ValidationStats,
@@ -349,32 +427,63 @@ def process_stream(
     """
     Process one Carbon stream using bounded memory.
 
-    Processing order:
+    Per-batch work order (executed inside worker processes):
 
         raw
-         ↓
-        schema validation
          ↓
         normalization
          ↓
         validation
          ↓
         enrichment
-         ↓
-        Parquet
+
+    The main process handles only: schema check (first batch), streaming
+    iteration, submitting batches to the pool, draining completed futures,
+    and Parquet writing.
     """
 
     stats = StreamingStats()
 
-    validation_stats = ValidationStats()
+    validation_results: list[ValidationStats] = []
 
     first_batch = True
+
+    n_workers = max_workers or max(1, (os.cpu_count() or 2) - 1)
+
+    # Bound how many batches can be in flight at once so memory stays
+    # proportional to worker count, preserving bounded-memory streaming.
+    inflight_limit = n_workers * 4
 
     with ParquetShardWriter(
         output_dir=output_dir,
         rows_per_shard=rows_per_shard,
         compression=compression,
-    ) as writer:
+    ) as writer, ProcessPoolExecutor(
+        max_workers=n_workers
+    ) as pool:
+
+        pending: list[Future] = []
+
+        def _drain(
+            futures: list[Future],
+        ) -> None:
+
+            for future in futures:
+
+                enriched, local_stats, _raw_rows = future.result()
+
+                enriched_rows = _batch_length(enriched)
+
+                _validate_batch_column_lengths(enriched)
+
+                stats.rows_normalized += enriched_rows
+                stats.rows_enriched += enriched_rows
+
+                validation_results.append(local_stats)
+
+                writer.write_batch(enriched)
+
+                stats.batches_processed += 1
 
         for raw_batch in iter_batches(
             stream,
@@ -397,7 +506,9 @@ def process_stream(
             # --------------------------------------------------------------
             # Schema contract
             #
-            # Only the first batch needs the blocking schema check.
+            # Only the first batch needs the blocking schema check. This
+            # stays sequential and in the main process, since it is a
+            # cheap, one-time, fail-fast gate.
             # --------------------------------------------------------------
 
             if first_batch:
@@ -409,99 +520,41 @@ def process_stream(
                 first_batch = False
 
             # --------------------------------------------------------------
-            # Normalization
+            # Submit normalize -> validate -> enrich as one unit of work.
             # --------------------------------------------------------------
 
-            normalized = normalize_batch(
-                raw_batch
+            pending.append(
+                pool.submit(_process_batch, raw_batch)
             )
 
-            normalized_rows = _batch_length(
-                normalized
-            )
+            if len(pending) >= inflight_limit:
 
-            if normalized_rows != raw_rows:
+                _drain(pending)
 
-                raise RuntimeError(
-                    "Normalization changed the number "
-                    "of rows: "
-                    f"input={raw_rows}, "
-                    f"output={normalized_rows}"
-                )
+                pending = []
 
-            _validate_batch_column_lengths(
-                normalized
-            )
+                if (
+                    context is not None
+                    and stats.batches_processed % 100 == 0
+                ):
 
-            stats.rows_normalized += (
-                normalized_rows
-            )
+                    context.log.info(
+                        "Streaming progress: "
+                        f"{stats.rows_read:,} rows read, "
+                        f"{stats.rows_enriched:,} enriched, "
+                        f"{stats.batches_processed:,} batches"
+                    )
 
-            # --------------------------------------------------------------
-            # Validation
-            #
-            # Exactly once per batch.
-            # --------------------------------------------------------------
-
-            validate_batch(
-                normalized,
-                validation_stats,
-            )
-
-            # --------------------------------------------------------------
-            # CPU enrichment
-            # --------------------------------------------------------------
-
-            enriched = enrich_batch(
-                normalized
-            )
-
-            enriched_rows = _batch_length(
-                enriched
-            )
-
-            if enriched_rows != normalized_rows:
-
-                raise RuntimeError(
-                    "Enrichment changed the number "
-                    "of rows: "
-                    f"input={normalized_rows}, "
-                    f"output={enriched_rows}"
-                )
-
-            _validate_batch_column_lengths(
-                enriched
-            )
-
-            stats.rows_enriched += (
-                enriched_rows
-            )
-
-            # --------------------------------------------------------------
-            # Parquet persistence
-            # --------------------------------------------------------------
-
-            writer.write_batch(
-                enriched
-            )
-
-            stats.batches_processed += 1
-
-            if (
-                context is not None
-                and stats.batches_processed % 100 == 0
-            ):
-
-                context.log.info(
-                    "Streaming progress: "
-                    f"{stats.rows_read:,} rows read, "
-                    f"{stats.rows_enriched:,} enriched, "
-                    f"{stats.batches_processed:,} batches"
-                )
+        # Flush any remaining in-flight batches.
+        _drain(pending)
 
         stats.shards_written = (
             writer.shards_written
         )
+
+    validation_stats = merge_validation_stats(
+        validation_results
+    )
 
     return (
         stats,
@@ -521,7 +574,8 @@ def process_stream(
     description=(
         "Streaming Carbon CPU pipeline. Reads the Hugging Face corpus "
         "incrementally, normalizes and validates bounded batches, applies "
-        "NumPy CPU enrichment, and writes Parquet shards."
+        "NumPy CPU enrichment, and writes Parquet shards. Normalization, "
+        "validation, and enrichment run in parallel worker processes."
     ),
 )
 def carbon_cpu_enriched_sequences(
@@ -566,6 +620,13 @@ def carbon_cpu_enriched_sequences(
         f"output_dir={config.output_dir!r}"
     )
 
+    cpu_workers = getattr(config, "cpu_workers", None)
+
+    context.log.info(
+        f"cpu_workers={cpu_workers!r} "
+        "(None => os.cpu_count() - 1)"
+    )
+
     # ------------------------------------------------------------------------
     # Create lazy Hugging Face stream.
     # ------------------------------------------------------------------------
@@ -586,6 +647,7 @@ def carbon_cpu_enriched_sequences(
         rows_per_shard=config.rows_per_shard,
         compression=config.compression,
         context=context,
+        max_workers=cpu_workers,
     )
 
     # ------------------------------------------------------------------------
@@ -639,6 +701,7 @@ def carbon_cpu_enriched_sequences(
             "rows_per_shard": config.rows_per_shard,
             "compression": config.compression,
             "output_dir": config.output_dir,
+            "cpu_workers": cpu_workers,
             "streaming": True,
         }
     )

@@ -90,50 +90,20 @@ def _normalize_taxonomy(value: Any) -> Any:
 # ============================================================================
 
 
-def normalize_batch(
-    batch: dict[str, list[Any]],
-) -> dict[str, list[Any]]:
-    """Apply deterministic normalization to one bounded batch.
+def normalize_batch(batch: dict[str, list[Any]]) -> dict[str, list[Any]]:
+    normalized = {column: list(values) for column, values in batch.items()}
 
-    All input columns are preserved. Only the explicitly defined string,
-    sequence, and taxonomy columns are transformed.
+    n = len(next(iter(batch.values()))) if batch else 0
+    token_cols_present = [c for c in _TOKEN_COLUMNS if c in normalized]
+    has_sequence = "sequence" in normalized
+    has_taxonomy = "taxonomy" in normalized
 
-    Parameters
-    ----------
-    batch:
-        Column-oriented batch represented as ``dict[str, list[Any]]``.
-
-    Returns
-    -------
-    dict[str, list[Any]]
-        Normalized batch with the same number of rows.
-    """
-
-    # Preserve every input column first. This is important because the
-    # original implementation only returned normalized columns, which would
-    # discard untouched numeric/metadata columns when used outside Dataset.map.
-    normalized = {
-        column: list(values)
-        for column, values in batch.items()
-    }
-
-    for column in _TOKEN_COLUMNS:
-        if column in normalized:
-            normalized[column] = [
-                _strip_string(value)
-                for value in normalized[column]
-            ]
-
-    if "sequence" in normalized:
-        normalized["sequence"] = [
-            _normalize_sequence(value)
-            for value in normalized["sequence"]
-        ]
-
-    if "taxonomy" in normalized:
-        normalized["taxonomy"] = [
-            _normalize_taxonomy(value)
-            for value in normalized["taxonomy"]
-        ]
+    for i in range(n):
+        for col in token_cols_present:
+            normalized[col][i] = _strip_string(normalized[col][i])
+        if has_sequence:
+            normalized["sequence"][i] = _normalize_sequence(normalized["sequence"][i])
+        if has_taxonomy:
+            normalized["taxonomy"][i] = _normalize_taxonomy(normalized["taxonomy"][i])
 
     return normalized

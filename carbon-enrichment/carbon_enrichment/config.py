@@ -64,6 +64,8 @@ class CarbonPipelineConfig(dg.Config):
 
     enable_progress: bool = True
 
+    cpu_workers: int | None = None
+
 
 # ============================================================================
 # Local storage configuration

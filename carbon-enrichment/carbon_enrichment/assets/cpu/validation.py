@@ -13,6 +13,14 @@ This module:
 - accumulates diagnostic quality statistics across batches.
 
 The raw taxonomy and biological sequence information are never truncated.
+
+NOTE ON PARALLEL EXECUTION
+---------------------------
+`ValidationStats.update()` mutates instance state in place. When batches are
+validated inside worker processes (see streaming.py), each worker must use
+its own local ValidationStats instance — do not share one instance across
+processes. Use `merge_validation_stats()` in the parent process to combine
+the per-worker results back into a single cumulative ValidationStats.
 """
 
 from dataclasses import dataclass, field
@@ -133,6 +141,105 @@ class ValidationStats:
 
 
 # ============================================================================
+# Cross-process merge
+# ============================================================================
+
+
+def merge_validation_stats(
+    results: list[ValidationStats],
+) -> ValidationStats:
+    """
+    Combine per-worker ValidationStats instances into one cumulative result.
+
+    Each worker process must accumulate into its own local ValidationStats
+    (via `.update()`), since dataclass mutation does not cross process
+    boundaries. This function performs the parent-process reduction step,
+    equivalent in effect to having run `.update()` sequentially on every
+    batch in a single process.
+    """
+
+    merged = ValidationStats()
+
+    for r in results:
+
+        merged.rows_checked += r.rows_checked
+
+        merged.empty_sequences += r.empty_sequences
+        merged.clean_acgt_only += r.clean_acgt_only
+        merged.invalid_alphabet_rows += r.invalid_alphabet_rows
+        merged.total_sequence_length += r.total_sequence_length
+
+        merged.negative_coordinate_rows += r.negative_coordinate_rows
+        merged.start_gte_end_rows += r.start_gte_end_rows
+
+        merged.empty_taxonomy += r.empty_taxonomy
+        merged.unknown_root_domain_rows += r.unknown_root_domain_rows
+        merged.thin_lineage_rows += r.thin_lineage_rows
+        merged.total_taxonomy_depth += r.total_taxonomy_depth
+
+        merged.mismatched_boundary_pairs += r.mismatched_boundary_pairs
+
+        for key, value in r.token_violations.items():
+            merged.token_violations[key] = (
+                merged.token_violations.get(key, 0) + value
+            )
+
+        for key, value in r.boundary_pair_distribution.items():
+            merged.boundary_pair_distribution[key] = (
+                merged.boundary_pair_distribution.get(key, 0) + value
+            )
+
+        for key, value in r.null_counts_by_column.items():
+            merged.null_counts_by_column[key] = (
+                merged.null_counts_by_column.get(key, 0) + value
+            )
+
+        merged.min_sequence_length = _merge_min(
+            merged.min_sequence_length, r.min_sequence_length
+        )
+        merged.max_sequence_length = _merge_max(
+            merged.max_sequence_length, r.max_sequence_length
+        )
+
+        merged.min_taxonomy_depth = _merge_min(
+            merged.min_taxonomy_depth, r.min_taxonomy_depth
+        )
+        merged.max_taxonomy_depth = _merge_max(
+            merged.max_taxonomy_depth, r.max_taxonomy_depth
+        )
+
+    return merged
+
+
+def _merge_min(
+    a: int | None,
+    b: int | None,
+) -> int | None:
+
+    if a is None:
+        return b
+
+    if b is None:
+        return a
+
+    return min(a, b)
+
+
+def _merge_max(
+    a: int | None,
+    b: int | None,
+) -> int | None:
+
+    if a is None:
+        return b
+
+    if b is None:
+        return a
+
+    return max(a, b)
+
+
+# ============================================================================
 # Schema validation
 # ============================================================================
 
@@ -175,6 +282,11 @@ def validate_batch(
 
     Schema validation is deliberately separate and should be performed once
     on the first raw batch using validate_schema().
+
+    When called from a worker process, pass a fresh, worker-local
+    ValidationStats (or leave `stats=None` to create one) — never share a
+    single instance across processes. Combine worker results afterward with
+    `merge_validation_stats()`.
     """
 
     if stats is None:
