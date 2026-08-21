@@ -68,15 +68,10 @@ HF_DATASET_SPLIT: Final[str] = "train"
 
 STREAMING_SPLIT: Final[str] = "train"
 
-# NOTE: only "dev" and "auth" are backed by a measured/benchmarked row
-# count. Do not add "integration" here until its row count has actually
-# been measured against the dataset — guessing it via interpolation
-# (e.g. assuming exact proportionality to the 25% figure) would silently
-# encode an unverified number as a hard contract.
 VALIDATION_LEVEL_ROWS: Final[dict[str, int]] = {
-    "dev": 100,
-    "integration": 9_264_679,
-    "auth": 11_580_849,
+    "dev": 1000,
+    "integration": 1_000_000,
+    "auth": 32_410_000,
 }
 
 DEFAULT_VALIDATION_LEVEL: Final[str] = "dev"

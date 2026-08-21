@@ -105,11 +105,20 @@ def _sequence_features(
     return gc_content, gc_skew, entropy, ambiguous, kmer_vector
 
 
-def _is_truncated(
+def _has_missing_boundary_tokens(
     sequence: str,
     begin_of_sequence: Any,
     end_of_sequence: Any,
 ) -> bool:
+    """
+    Check for absent/incorrect dataset boundary tokens.
+
+    NOTE: This reflects the presence of the <s>/</s> dataset boundary
+    tokens, not biological sequence truncation. An empty sequence or a
+    missing/incorrect boundary token does not by itself indicate that the
+    underlying biological sequence was cut short — it indicates a dataset
+    framing issue. See `_quality_flag` for how this is surfaced.
+    """
     return (
         not sequence
         or begin_of_sequence != "<s>"
@@ -124,12 +133,14 @@ def _quality_flag(
     begin_of_sequence: Any,
     end_of_sequence: Any,
 ) -> str:
-    if _is_truncated(
+    if _has_missing_boundary_tokens(
         sequence,
         begin_of_sequence,
         end_of_sequence,
     ):
-        return "truncated"
+        # Renamed from "truncated": absent/incorrect <s>/</s> tokens are a
+        # dataset boundary-token issue, not confirmed biological truncation.
+        return "missing_sequence_boundary_tokens"
     if ambiguous:
         return "ambiguous_bases"
     if entropy < LOW_COMPLEXITY_ENTROPY_THRESHOLD:
@@ -165,9 +176,9 @@ def enrich_batch(
             "gene_length": [],
             "shannon_entropy": [],
             "kmer_frequency_vector": [],
-            "relative_gene_position": [],
             "strand_normalized_sequence": [],
             "taxonomy_domain": [],
+            "taxonomy_depth": [],
             "is_coding_region": [],
             "qc_flag": [],
         }
@@ -182,9 +193,9 @@ def enrich_batch(
             "gene_length",
             "shannon_entropy",
             "kmer_frequency_vector",
-            "relative_gene_position",
             "strand_normalized_sequence",
             "taxonomy_domain",
+            "taxonomy_depth",
             "is_coding_region",
             "qc_flag",
         )
@@ -219,9 +230,6 @@ def enrich_batch(
         end_int = int(end)
         gene_length = max(end_int - start_int, 0)
 
-        # Coordinate-relative proxy; not genome-relative without parent length.
-        relative_position = start_int / max(end_int, 1)
-
         normalized_sequence = (
             _reverse_complement(sequence)
             if strand == "<->"
@@ -234,7 +242,6 @@ def enrich_batch(
         append["gene_length"](gene_length)
         append["shannon_entropy"](entropy)
         append["kmer_frequency_vector"](kmer_vector)
-        append["relative_gene_position"](relative_position)
         append["strand_normalized_sequence"](normalized_sequence)
 
         if isinstance(taxonomy, str):
@@ -247,6 +254,7 @@ def enrich_batch(
             ranks = []
 
         append["taxonomy_domain"](ranks[0] if ranks else None)
+        append["taxonomy_depth"](len(ranks))
 
         append["is_coding_region"](
             gene_type in CODING_GENE_TYPES
