@@ -26,11 +26,9 @@ injection:
     assets/cpu/ingest.py
 """
 
-
 from pathlib import Path
 
 from dagster_hf_datasets import HuggingFaceResource
-
 
 # ============================================================================
 # Project defaults

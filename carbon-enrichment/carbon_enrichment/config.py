@@ -7,13 +7,11 @@ Dagster asset/resource wiring belongs in definitions.py.
 """
 
 from pathlib import Path
+from typing import Literal
 
 import dagster as dg
 
-from typing import Literal
-
 from carbon_enrichment.schema import DEFAULT_VALIDATION_LEVEL
-
 
 # ============================================================================
 # Complete CPU pipeline configuration
@@ -54,9 +52,7 @@ class CarbonPipelineConfig(dg.Config):
 
     compression: str = "zstd"
 
-    output_dir: str = (
-        ".dagster_hf_storage/carbon_cpu_enriched_sequences"
-    )
+    output_dir: str = ".dagster_hf_storage/carbon_cpu_enriched_sequences"
 
     # ------------------------------------------------------------------------
     # Execution
@@ -101,6 +97,4 @@ DEFAULT_ROWS_PER_SHARD: int = 250_000
 
 DEFAULT_PARQUET_COMPRESSION: str = "zstd"
 
-DEFAULT_OUTPUT_DIR: str = (
-    ".dagster_hf_storage/carbon_cpu_enriched_sequences"
-)
+DEFAULT_OUTPUT_DIR: str = ".dagster_hf_storage/carbon_cpu_enriched_sequences"

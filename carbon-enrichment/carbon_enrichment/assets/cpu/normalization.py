@@ -20,7 +20,6 @@ Dataset.map(). Streaming/orchestration is handled by streaming.py.
 
 from typing import Any
 
-
 # ============================================================================
 # Columns that contain string/token values
 # ============================================================================
@@ -77,10 +76,7 @@ def _normalize_taxonomy(value: Any) -> Any:
     if not isinstance(value, str):
         return value
 
-    parts = [
-        part.strip()
-        for part in value.strip().split(";")
-    ]
+    parts = [part.strip() for part in value.strip().split(";")]
 
     return ";".join(parts)
 

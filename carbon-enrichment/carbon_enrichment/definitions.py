@@ -45,7 +45,6 @@ from carbon_enrichment.resources.hf_client import (
     create_huggingface_resource,
 )
 
-
 CPU_ASSETS = [
     carbon_cpu_enriched_sequences,
 ]

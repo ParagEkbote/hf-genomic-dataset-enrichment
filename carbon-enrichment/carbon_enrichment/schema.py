@@ -25,14 +25,11 @@ respective processing modules rather than the raw-data contract.
 
 from typing import Final
 
-
 # ============================================================================
 # 1. Hugging Face dataset
 # ============================================================================
 
-HF_DATASET_PATH: Final[str] = (
-    "HuggingFaceBio/carbon-pretraining-corpus"
-)
+HF_DATASET_PATH: Final[str] = "HuggingFaceBio/carbon-pretraining-corpus"
 
 HF_DATASET_CONFIG: Final[str] = "eukaryote_generator"
 
@@ -110,9 +107,7 @@ EXPECTED_COLUMNS: Final[dict[str, str]] = {
     "end": "int64",
 }
 
-EXPECTED_COLUMN_NAMES: Final[tuple[str, ...]] = tuple(
-    EXPECTED_COLUMNS.keys()
-)
+EXPECTED_COLUMN_NAMES: Final[tuple[str, ...]] = tuple(EXPECTED_COLUMNS.keys())
 
 EXPECTED_COLUMN_COUNT: Final[int] = len(EXPECTED_COLUMNS)
 
@@ -153,28 +148,40 @@ REQUIRED_FIELDS: Final[tuple[str, ...]] = (
 VALID_SEQUENCE_TOKENS: Final[dict[str, frozenset[str]]] = {
     "begin_of_sequence": frozenset({"<s>"}),
     "end_of_sequence": frozenset({"</s>"}),
-    "begin_of_gene": frozenset({
-        "<bog>",
-        "<bok>",
-    }),
-    "end_of_gene": frozenset({
-        "<eog>",
-        "<eok>",
-    }),
-    "species_type": frozenset({
-        "<fng>",
-    }),
-    "strand": frozenset({
-        "<+>",
-        "<->",
-    }),
-    "molecule_type": frozenset({
-        "DNA",
-    }),
-    "topology": frozenset({
-        "linear",
-        "circular",
-    }),
+    "begin_of_gene": frozenset(
+        {
+            "<bog>",
+            "<bok>",
+        }
+    ),
+    "end_of_gene": frozenset(
+        {
+            "<eog>",
+            "<eok>",
+        }
+    ),
+    "species_type": frozenset(
+        {
+            "<fng>",
+        }
+    ),
+    "strand": frozenset(
+        {
+            "<+>",
+            "<->",
+        }
+    ),
+    "molecule_type": frozenset(
+        {
+            "DNA",
+        }
+    ),
+    "topology": frozenset(
+        {
+            "linear",
+            "circular",
+        }
+    ),
 }
 
 
@@ -214,13 +221,9 @@ GENE_BOUNDARY_PAIRS: Final[tuple[tuple[str, str], ...]] = (
 # tracked separately by enrichment/QC rather than being discarded.
 # ============================================================================
 
-IUPAC_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset(
-    "ACGTNRYSWKMBDHV-"
-)
+IUPAC_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset("ACGTNRYSWKMBDHV-")
 
-CLEAN_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset(
-    "ACGT"
-)
+CLEAN_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset("ACGT")
 
 
 # ============================================================================

@@ -45,20 +45,17 @@ Per-worker ValidationStats instances are merged in the main process via
 process boundaries.
 """
 
-
+import multiprocessing
+import os
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Mapping
+from typing import Any
 
 import dagster as dg
 import pyarrow as pa
 import pyarrow.parquet as pq
-from concurrent.futures import ProcessPoolExecutor, Future
-import multiprocessing
-import os
-
-from dagster_hf_datasets import HuggingFaceResource
-
 from carbon_enrichment.assets.cpu.enrichment import enrich_batch
 from carbon_enrichment.assets.cpu.ingest import create_carbon_stream
 from carbon_enrichment.assets.cpu.normalization import normalize_batch
@@ -69,7 +66,7 @@ from carbon_enrichment.assets.cpu.validation import (
     validate_schema,
 )
 from carbon_enrichment.config import CarbonPipelineConfig
-
+from dagster_hf_datasets import HuggingFaceResource
 
 Batch = dict[str, list[Any]]
 
@@ -115,24 +112,19 @@ def iter_batches(
     """
 
     if batch_size <= 0:
-        raise ValueError(
-            "batch_size must be greater than zero"
-        )
+        raise ValueError("batch_size must be greater than zero")
 
     rows: list[Mapping[str, Any]] = []
 
     for row in stream:
-
         rows.append(row)
 
         if len(rows) >= batch_size:
-
             yield _rows_to_batch(rows)
 
             rows = []
 
     if rows:
-
         yield _rows_to_batch(rows)
 
 
@@ -146,13 +138,7 @@ def _rows_to_batch(
 
     columns = rows[0].keys()
 
-    return {
-        column: [
-            row.get(column)
-            for row in rows
-        ]
-        for column in columns
-    }
+    return {column: [row.get(column) for row in rows] for column in columns}
 
 
 def _batch_length(
@@ -163,9 +149,7 @@ def _batch_length(
     if not batch:
         return 0
 
-    return len(
-        next(iter(batch.values()))
-    )
+    return len(next(iter(batch.values())))
 
 
 def _validate_batch_column_lengths(
@@ -178,16 +162,10 @@ def _validate_batch_column_lengths(
     if not batch:
         return
 
-    lengths = {
-        column: len(values)
-        for column, values in batch.items()
-    }
+    lengths = {column: len(values) for column, values in batch.items()}
 
     if len(set(lengths.values())) > 1:
-        raise RuntimeError(
-            "Batch columns have inconsistent lengths: "
-            f"{lengths}"
-        )
+        raise RuntimeError(f"Batch columns have inconsistent lengths: {lengths}")
 
 
 # ============================================================================
@@ -262,9 +240,7 @@ class ParquetShardWriter:
     ) -> None:
 
         if rows_per_shard <= 0:
-            raise ValueError(
-                "rows_per_shard must be greater than zero"
-            )
+            raise ValueError("rows_per_shard must be greater than zero")
 
         self.output_dir = Path(output_dir)
 
@@ -311,11 +287,7 @@ class ParquetShardWriter:
         offset = 0
 
         while offset < table.num_rows:
-
-            capacity = (
-                self.rows_per_shard
-                - self._rows_in_current_shard
-            )
+            capacity = self.rows_per_shard - self._rows_in_current_shard
 
             take = min(
                 capacity,
@@ -340,11 +312,8 @@ class ParquetShardWriter:
             return
 
         if self._writer is None:
-
             self._writer = pq.ParquetWriter(
-                self._shard_path(
-                    self._shard_index
-                ),
+                self._shard_path(self._shard_index),
                 table.schema,
                 compression=self.compression,
             )
@@ -355,10 +324,7 @@ class ParquetShardWriter:
 
         self._rows_written += table.num_rows
 
-        if (
-            self._rows_in_current_shard
-            >= self.rows_per_shard
-        ):
+        if self._rows_in_current_shard >= self.rows_per_shard:
             self._close_current_shard()
 
     def _shard_path(
@@ -366,10 +332,7 @@ class ParquetShardWriter:
         index: int,
     ) -> Path:
 
-        return (
-            self.output_dir
-            / f"shard-{index:05d}.parquet"
-        )
+        return self.output_dir / f"shard-{index:05d}.parquet"
 
     def _close_current_shard(self) -> None:
 
@@ -466,15 +429,17 @@ def process_stream(
     # Windows, where spawn is the only option.
     mp_context = multiprocessing.get_context("fork")
 
-    with ParquetShardWriter(
-        output_dir=output_dir,
-        rows_per_shard=rows_per_shard,
-        compression=compression,
-    ) as writer, ProcessPoolExecutor(
-        max_workers=n_workers,
-        mp_context=mp_context,
-    ) as pool:
-
+    with (
+        ParquetShardWriter(
+            output_dir=output_dir,
+            rows_per_shard=rows_per_shard,
+            compression=compression,
+        ) as writer,
+        ProcessPoolExecutor(
+            max_workers=n_workers,
+            mp_context=mp_context,
+        ) as pool,
+    ):
         pending: list[Future] = []
 
         def _drain(
@@ -482,7 +447,6 @@ def process_stream(
         ) -> None:
 
             for future in futures:
-
                 enriched, local_stats, _raw_rows = future.result()
 
                 enriched_rows = _batch_length(enriched)
@@ -502,17 +466,12 @@ def process_stream(
             stream,
             batch_size=batch_size,
         ):
-
-            raw_rows = _batch_length(
-                raw_batch
-            )
+            raw_rows = _batch_length(raw_batch)
 
             if raw_rows == 0:
                 continue
 
-            _validate_batch_column_lengths(
-                raw_batch
-            )
+            _validate_batch_column_lengths(raw_batch)
 
             stats.rows_read += raw_rows
 
@@ -525,10 +484,7 @@ def process_stream(
             # --------------------------------------------------------------
 
             if first_batch:
-
-                validate_schema(
-                    raw_batch
-                )
+                validate_schema(raw_batch)
 
                 first_batch = False
 
@@ -536,21 +492,14 @@ def process_stream(
             # Submit normalize -> validate -> enrich as one unit of work.
             # --------------------------------------------------------------
 
-            pending.append(
-                pool.submit(_process_batch, raw_batch)
-            )
+            pending.append(pool.submit(_process_batch, raw_batch))
 
             if len(pending) >= inflight_limit:
-
                 _drain(pending)
 
                 pending = []
 
-                if (
-                    context is not None
-                    and stats.batches_processed % 100 == 0
-                ):
-
+                if context is not None and stats.batches_processed % 100 == 0:
                     context.log.info(
                         "Streaming progress: "
                         f"{stats.rows_read:,} rows read, "
@@ -561,13 +510,9 @@ def process_stream(
         # Flush any remaining in-flight batches.
         _drain(pending)
 
-        stats.shards_written = (
-            writer.shards_written
-        )
+        stats.shards_written = writer.shards_written
 
-    validation_stats = merge_validation_stats(
-        validation_results
-    )
+    validation_stats = merge_validation_stats(validation_results)
 
     return (
         stats,
@@ -603,42 +548,23 @@ def carbon_cpu_enriched_sequences(
     # ------------------------------------------------------------------------
 
     if not config.streaming:
+        raise ValueError("carbon_cpu_enriched_sequences requires streaming=True.")
 
-        raise ValueError(
-            "carbon_cpu_enriched_sequences requires "
-            "streaming=True."
-        )
+    context.log.info("Starting streaming Carbon CPU pipeline.")
 
-    context.log.info(
-        "Starting streaming Carbon CPU pipeline."
-    )
+    context.log.info(f"validation_level={config.validation_level!r}")
 
-    context.log.info(
-        f"validation_level={config.validation_level!r}"
-    )
+    context.log.info(f"batch_size={config.batch_size:,}")
 
-    context.log.info(
-        f"batch_size={config.batch_size:,}"
-    )
+    context.log.info(f"rows_per_shard={config.rows_per_shard:,}")
 
-    context.log.info(
-        f"rows_per_shard={config.rows_per_shard:,}"
-    )
+    context.log.info(f"compression={config.compression!r}")
 
-    context.log.info(
-        f"compression={config.compression!r}"
-    )
-
-    context.log.info(
-        f"output_dir={config.output_dir!r}"
-    )
+    context.log.info(f"output_dir={config.output_dir!r}")
 
     cpu_workers = getattr(config, "cpu_workers", None)
 
-    context.log.info(
-        f"cpu_workers={cpu_workers!r} "
-        "(None => os.cpu_count() - 1)"
-    )
+    context.log.info(f"cpu_workers={cpu_workers!r} (None => os.cpu_count() - 1)")
 
     # ------------------------------------------------------------------------
     # Create lazy Hugging Face stream.
@@ -668,7 +594,6 @@ def carbon_cpu_enriched_sequences(
     # ------------------------------------------------------------------------
 
     if stats.rows_read != stats.rows_normalized:
-
         raise RuntimeError(
             "Normalization changed total row count: "
             f"input={stats.rows_read}, "
@@ -676,7 +601,6 @@ def carbon_cpu_enriched_sequences(
         )
 
     if stats.rows_normalized != stats.rows_enriched:
-
         raise RuntimeError(
             "Enrichment changed total row count: "
             f"normalized={stats.rows_normalized}, "

@@ -15,15 +15,32 @@ LOW_COMPLEXITY_ENTROPY_THRESHOLD = 1.0
 # Only includes tokens actually observed in the Carbon corpus. Do not
 # silently map additional values (e.g. "CDS", "coding") to coding-region
 # status unless they have been confirmed present in the data.
-CODING_GENE_TYPES = frozenset({
-    "<cds>",
-})
+CODING_GENE_TYPES = frozenset(
+    {
+        "<cds>",
+    }
+)
 
-_IUPAC_COMPLEMENT = str.maketrans({
-    "A": "T", "T": "A", "C": "G", "G": "C", "N": "N",
-    "R": "Y", "Y": "R", "S": "S", "W": "W", "K": "M",
-    "M": "K", "B": "V", "V": "B", "D": "H", "H": "D", "-": "-",
-})
+_IUPAC_COMPLEMENT = str.maketrans(
+    {
+        "A": "T",
+        "T": "A",
+        "C": "G",
+        "G": "C",
+        "N": "N",
+        "R": "Y",
+        "Y": "R",
+        "S": "S",
+        "W": "W",
+        "K": "M",
+        "M": "K",
+        "B": "V",
+        "V": "B",
+        "D": "H",
+        "H": "D",
+        "-": "-",
+    }
+)
 
 
 def _reverse_complement(sequence: str) -> str:
@@ -62,29 +79,17 @@ def _sequence_features(
         gc_content = 0.0
         entropy = 0.0
     else:
-        gc_content = float(
-            (counts[1] + counts[2]) / canonical_count
-        )
+        gc_content = float((counts[1] + counts[2]) / canonical_count)
         probabilities = counts[counts > 0] / canonical_count
-        entropy = float(
-            -np.sum(probabilities * np.log2(probabilities))
-        )
+        entropy = float(-np.sum(probabilities * np.log2(probabilities)))
 
     gc_count = int(counts[1] + counts[2])
-    gc_skew = (
-        float((counts[2] - counts[1]) / gc_count)
-        if gc_count
-        else 0.0
-    )
+    gc_skew = float((counts[2] - counts[1]) / gc_count) if gc_count else 0.0
 
     if len(codes) < KMER_SIZE:
         kmer_vector = [0.0] * KMER_VECTOR_SIZE
     else:
-        valid = (
-            (codes[:-2] >= 0)
-            & (codes[1:-1] >= 0)
-            & (codes[2:] >= 0)
-        )
+        valid = (codes[:-2] >= 0) & (codes[1:-1] >= 0) & (codes[2:] >= 0)
 
         if np.any(valid):
             first = codes[:-2][valid].astype(np.int16, copy=False)
@@ -96,9 +101,7 @@ def _sequence_features(
                 minlength=KMER_VECTOR_SIZE,
             )
             valid_kmers = int(kmer_indices.size)
-            kmer_vector = (
-                kmer_counts.astype(np.float64) / valid_kmers
-            ).tolist()
+            kmer_vector = (kmer_counts.astype(np.float64) / valid_kmers).tolist()
         else:
             kmer_vector = [0.0] * KMER_VECTOR_SIZE
 
@@ -119,11 +122,7 @@ def _has_missing_boundary_tokens(
     underlying biological sequence was cut short — it indicates a dataset
     framing issue. See `_quality_flag` for how this is surfaced.
     """
-    return (
-        not sequence
-        or begin_of_sequence != "<s>"
-        or end_of_sequence != "</s>"
-    )
+    return not sequence or begin_of_sequence != "<s>" or end_of_sequence != "</s>"
 
 
 def _quality_flag(
@@ -163,8 +162,7 @@ def enrich_batch(
 
     # Preserve every original Carbon column.
     output: dict[str, list[Any]] = {
-        column: list(values)
-        for column, values in batch.items()
+        column: list(values) for column, values in batch.items()
     }
 
     # Derived features.
@@ -222,18 +220,14 @@ def enrich_batch(
     ):
         sequence = sequence or ""
 
-        gc, skew, entropy, ambiguous, kmer_vector = _sequence_features(
-            sequence
-        )
+        gc, skew, entropy, ambiguous, kmer_vector = _sequence_features(sequence)
 
         start_int = int(start)
         end_int = int(end)
         gene_length = max(end_int - start_int, 0)
 
         normalized_sequence = (
-            _reverse_complement(sequence)
-            if strand == "<->"
-            else sequence
+            _reverse_complement(sequence) if strand == "<->" else sequence
         )
 
         append["gc_content"](gc)
@@ -245,20 +239,14 @@ def enrich_batch(
         append["strand_normalized_sequence"](normalized_sequence)
 
         if isinstance(taxonomy, str):
-            ranks = [
-                part.strip()
-                for part in taxonomy.split(";")
-                if part.strip()
-            ]
+            ranks = [part.strip() for part in taxonomy.split(";") if part.strip()]
         else:
             ranks = []
 
         append["taxonomy_domain"](ranks[0] if ranks else None)
         append["taxonomy_depth"](len(ranks))
 
-        append["is_coding_region"](
-            gene_type in CODING_GENE_TYPES
-        )
+        append["is_coding_region"](gene_type in CODING_GENE_TYPES)
 
         append["qc_flag"](
             _quality_flag(

@@ -23,11 +23,11 @@ processes. Use `merge_validation_stats()` in the parent process to combine
 the per-worker results back into a single cumulative ValidationStats.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 import dagster as dg
-
 from carbon_enrichment.schema import (
     EXPECTED_COLUMNS,
     GENE_BOUNDARY_PAIRS,
@@ -36,7 +36,6 @@ from carbon_enrichment.schema import (
     REQUIRED_FIELDS,
     VALID_SEQUENCE_TOKENS,
 )
-
 
 # ============================================================================
 # Validation statistics
@@ -53,17 +52,13 @@ class ValidationStats:
     # Token/category validation
     # ------------------------------------------------------------------------
 
-    token_violations: dict[str, int] = field(
-        default_factory=dict
-    )
+    token_violations: dict[str, int] = field(default_factory=dict)
 
     # ------------------------------------------------------------------------
     # Gene boundaries
     # ------------------------------------------------------------------------
 
-    boundary_pair_distribution: dict[str, int] = field(
-        default_factory=dict
-    )
+    boundary_pair_distribution: dict[str, int] = field(default_factory=dict)
 
     mismatched_boundary_pairs: int = 0
 
@@ -111,9 +106,7 @@ class ValidationStats:
     # Required fields
     # ------------------------------------------------------------------------
 
-    null_counts_by_column: dict[str, int] = field(
-        default_factory=dict
-    )
+    null_counts_by_column: dict[str, int] = field(default_factory=dict)
 
     # =========================================================================
     # Update
@@ -161,7 +154,6 @@ def merge_validation_stats(
     merged = ValidationStats()
 
     for r in results:
-
         merged.rows_checked += r.rows_checked
 
         merged.empty_sequences += r.empty_sequences
@@ -180,9 +172,7 @@ def merge_validation_stats(
         merged.mismatched_boundary_pairs += r.mismatched_boundary_pairs
 
         for key, value in r.token_violations.items():
-            merged.token_violations[key] = (
-                merged.token_violations.get(key, 0) + value
-            )
+            merged.token_violations[key] = merged.token_violations.get(key, 0) + value
 
         for key, value in r.boundary_pair_distribution.items():
             merged.boundary_pair_distribution[key] = (
@@ -309,9 +299,7 @@ def validation_metadata(
 
     total = stats.rows_checked
 
-    non_empty_sequences = (
-        total - stats.empty_sequences
-    )
+    non_empty_sequences = total - stats.empty_sequences
 
     mean_sequence_length = (
         stats.total_sequence_length / non_empty_sequences
@@ -320,106 +308,42 @@ def validation_metadata(
     )
 
     clean_pct = (
-        100.0
-        * stats.clean_acgt_only
-        / max(non_empty_sequences, 1)
+        100.0 * stats.clean_acgt_only / max(non_empty_sequences, 1)
         if non_empty_sequences
         else 0.0
     )
 
-    mean_taxonomy_depth = (
-        stats.total_taxonomy_depth / total
-        if total
-        else None
-    )
+    mean_taxonomy_depth = stats.total_taxonomy_depth / total if total else None
 
     return {
         "rows_checked": total,
-
-        "violations_by_column": dict(
-            stats.token_violations
-        ),
-
-        "boundary_pair_distribution": dict(
-            stats.boundary_pair_distribution
-        ),
-
-        "mismatched_pair_count": (
-            stats.mismatched_boundary_pairs
-        ),
-
-        "empty_sequences": (
-            stats.empty_sequences
-        ),
-
-        "clean_acgt_only": (
-            stats.clean_acgt_only
-        ),
-
+        "violations_by_column": dict(stats.token_violations),
+        "boundary_pair_distribution": dict(stats.boundary_pair_distribution),
+        "mismatched_pair_count": (stats.mismatched_boundary_pairs),
+        "empty_sequences": (stats.empty_sequences),
+        "clean_acgt_only": (stats.clean_acgt_only),
         "clean_acgt_pct": round(
             clean_pct,
             2,
         ),
-
-        "invalid_alphabet_rows": (
-            stats.invalid_alphabet_rows
-        ),
-
-        "min_sequence_length": (
-            stats.min_sequence_length
-        ),
-
-        "max_sequence_length": (
-            stats.max_sequence_length
-        ),
-
+        "invalid_alphabet_rows": (stats.invalid_alphabet_rows),
+        "min_sequence_length": (stats.min_sequence_length),
+        "max_sequence_length": (stats.max_sequence_length),
         "mean_sequence_length": (
-            round(mean_sequence_length, 1)
-            if mean_sequence_length is not None
-            else None
+            round(mean_sequence_length, 1) if mean_sequence_length is not None else None
         ),
-
-        "negative_coordinate_rows": (
-            stats.negative_coordinate_rows
-        ),
-
-        "start_gte_end_rows": (
-            stats.start_gte_end_rows
-        ),
-
-        "empty_taxonomy": (
-            stats.empty_taxonomy
-        ),
-
-        "unknown_root_domain_rows": (
-            stats.unknown_root_domain_rows
-        ),
-
-        "thin_lineage_rows": (
-            stats.thin_lineage_rows
-        ),
-
-        "min_taxonomy_depth": (
-            stats.min_taxonomy_depth
-        ),
-
-        "max_taxonomy_depth": (
-            stats.max_taxonomy_depth
-        ),
-
+        "negative_coordinate_rows": (stats.negative_coordinate_rows),
+        "start_gte_end_rows": (stats.start_gte_end_rows),
+        "empty_taxonomy": (stats.empty_taxonomy),
+        "unknown_root_domain_rows": (stats.unknown_root_domain_rows),
+        "thin_lineage_rows": (stats.thin_lineage_rows),
+        "min_taxonomy_depth": (stats.min_taxonomy_depth),
+        "max_taxonomy_depth": (stats.max_taxonomy_depth),
         "mean_taxonomy_depth": (
-            round(mean_taxonomy_depth, 2)
-            if mean_taxonomy_depth is not None
-            else None
+            round(mean_taxonomy_depth, 2) if mean_taxonomy_depth is not None else None
         ),
-
-        "null_counts_by_column": dict(
-            stats.null_counts_by_column
-        ),
-
-        "total_null_values": sum(
-            stats.null_counts_by_column.values()
-        ),
+        "null_counts_by_column": dict(stats.null_counts_by_column),
+        "total_null_values": sum(stats.null_counts_by_column.values()),
     }
 
 
@@ -454,16 +378,13 @@ def _validate_tokens(
     """
 
     for column, valid_values in VALID_SEQUENCE_TOKENS.items():
-
         if column not in batch:
             continue
 
         valid = set(valid_values)
 
         for value in batch[column]:
-
             if value not in valid:
-
                 stats.token_violations[column] = (
                     stats.token_violations.get(
                         column,
@@ -493,15 +414,12 @@ def _validate_boundaries(
         [],
     )
 
-    valid_pairs = set(
-        GENE_BOUNDARY_PAIRS
-    )
+    valid_pairs = set(GENE_BOUNDARY_PAIRS)
 
     for begin, end in zip(
         begins,
         ends,
     ):
-
         pair = (
             begin,
             end,
@@ -535,12 +453,7 @@ def _validate_sequences(
         "sequence",
         [],
     ):
-
-        sequence = (
-            ""
-            if value is None
-            else str(value)
-        )
+        sequence = "" if value is None else str(value)
 
         length = len(sequence)
 
@@ -548,11 +461,7 @@ def _validate_sequences(
             stats.empty_sequences += 1
             continue
 
-        valid_alphabet = (
-            set(sequence).issubset(
-                IUPAC_NUCLEOTIDE_CHARS
-            )
-        )
+        valid_alphabet = set(sequence).issubset(IUPAC_NUCLEOTIDE_CHARS)
 
         if not valid_alphabet:
             stats.invalid_alphabet_rows += 1
@@ -562,16 +471,10 @@ def _validate_sequences(
 
         stats.total_sequence_length += length
 
-        if (
-            stats.min_sequence_length is None
-            or length < stats.min_sequence_length
-        ):
+        if stats.min_sequence_length is None or length < stats.min_sequence_length:
             stats.min_sequence_length = length
 
-        if (
-            stats.max_sequence_length is None
-            or length > stats.max_sequence_length
-        ):
+        if stats.max_sequence_length is None or length > stats.max_sequence_length:
             stats.max_sequence_length = length
 
 
@@ -580,7 +483,8 @@ def _is_clean_acgt(
 ) -> bool:
 
     return all(
-        base in {
+        base
+        in {
             "A",
             "C",
             "G",
@@ -604,7 +508,6 @@ def _validate_coordinates(
         batch.get("start", []),
         batch.get("end", []),
     ):
-
         try:
             start_value = float(start)
             end_value = float(end)
@@ -613,15 +516,11 @@ def _validate_coordinates(
             TypeError,
             ValueError,
         ):
-
             stats.negative_coordinate_rows += 1
 
             continue
 
-        if (
-            start_value < 0
-            or end_value < 0
-        ):
+        if start_value < 0 or end_value < 0:
             stats.negative_coordinate_rows += 1
 
         if start_value >= end_value:
@@ -642,22 +541,13 @@ def _validate_taxonomy(
         "taxonomy",
         [],
     ):
-
-        taxonomy = (
-            ""
-            if value is None
-            else str(value)
-        )
+        taxonomy = "" if value is None else str(value)
 
         if not taxonomy:
             stats.empty_taxonomy += 1
             continue
 
-        levels = [
-            part.strip()
-            for part in taxonomy.split(";")
-            if part.strip()
-        ]
+        levels = [part.strip() for part in taxonomy.split(";") if part.strip()]
 
         if not levels:
             stats.empty_taxonomy += 1
@@ -672,16 +562,10 @@ def _validate_taxonomy(
 
         stats.total_taxonomy_depth += depth
 
-        if (
-            stats.min_taxonomy_depth is None
-            or depth < stats.min_taxonomy_depth
-        ):
+        if stats.min_taxonomy_depth is None or depth < stats.min_taxonomy_depth:
             stats.min_taxonomy_depth = depth
 
-        if (
-            stats.max_taxonomy_depth is None
-            or depth > stats.max_taxonomy_depth
-        ):
+        if stats.max_taxonomy_depth is None or depth > stats.max_taxonomy_depth:
             stats.max_taxonomy_depth = depth
 
         if depth < 2:
@@ -699,17 +583,12 @@ def _validate_required_fields(
 ) -> None:
 
     for column in REQUIRED_FIELDS:
-
         if column not in batch:
             continue
 
-        count = sum(
-            value is None
-            for value in batch[column]
-        )
+        count = sum(value is None for value in batch[column])
 
         if count:
-
             stats.null_counts_by_column[column] = (
                 stats.null_counts_by_column.get(
                     column,
@@ -731,9 +610,7 @@ def _batch_length(
     if not batch:
         return 0
 
-    return len(
-        next(iter(batch.values()))
-    )
+    return len(next(iter(batch.values())))
 
 
 def _to_metadata_value(
