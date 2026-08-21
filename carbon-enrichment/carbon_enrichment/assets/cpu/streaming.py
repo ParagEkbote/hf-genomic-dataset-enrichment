@@ -54,6 +54,7 @@ import dagster as dg
 import pyarrow as pa
 import pyarrow.parquet as pq
 from concurrent.futures import ProcessPoolExecutor, Future
+import multiprocessing
 import os
 
 from dagster_hf_datasets import HuggingFaceResource
@@ -454,12 +455,24 @@ def process_stream(
     # proportional to worker count, preserving bounded-memory streaming.
     inflight_limit = n_workers * 4
 
+    # Use "fork" explicitly rather than relying on the platform default.
+    # Dagster's multiprocess executor already runs this asset inside its
+    # own subprocess (STEP_WORKER). Nesting a "spawn"-based pool inside
+    # that subprocess forces each worker to reimport the Python process
+    # from scratch, which can fail to resolve locally/editable-installed
+    # packages such as carbon_enrichment. "fork" instead inherits the
+    # parent's already-loaded modules and sys.path, avoiding the reimport
+    # entirely. This requires Linux/macOS; fork is not available on
+    # Windows, where spawn is the only option.
+    mp_context = multiprocessing.get_context("fork")
+
     with ParquetShardWriter(
         output_dir=output_dir,
         rows_per_shard=rows_per_shard,
         compression=compression,
     ) as writer, ProcessPoolExecutor(
-        max_workers=n_workers
+        max_workers=n_workers,
+        mp_context=mp_context,
     ) as pool:
 
         pending: list[Future] = []
