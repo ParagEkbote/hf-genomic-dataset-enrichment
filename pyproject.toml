@@ -41,6 +41,8 @@ dependencies = [
     # Hugging Face datasets
     "datasets>=3.0",
     "huggingface-hub>=1.0.0",
+    "kernels",
+    "transformers",
     "pandas>=2.2",
     "numpy",
     # Configuration / validation

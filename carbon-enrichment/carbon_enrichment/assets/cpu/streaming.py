@@ -6,25 +6,48 @@ Processing flow:
     Hugging Face IterableDataset
                 │
                 ▼
-          bounded batch
+          bounded batch (pa.RecordBatch)
                 │
                 ▼
           schema validation (main process, first batch only)
                 │
                 ▼
-   ┌─── worker process (pool) ───┐
-   │  normalization               │
-   │       ↓                      │
-   │  validation (local stats)    │
-   │       ↓                      │
-   │  NumPy enrichment             │
-   └───────────────────────────────┘
+   ┌─── worker process (pool) ───────────────────────────┐
+   │  RecordBatch → dict   (unavoidable: normalize/       │
+   │       ↓         validate/enrich are row-wise Python) │
+   │  normalization                                       │
+   │       ↓                                               │
+   │  validation (local stats)                             │
+   │       ↓                                               │
+   │  NumPy enrichment                                     │
+   │       ↓                                               │
+   │  dict → RecordBatch                                   │
+   └───────────────────────────────────────────────────────┘
                 │
                 ▼
-          Parquet shards (main process)
+          Parquet shards (main process, Arrow write, no
+          intermediate Table/dict materialization)
 
 The complete Carbon corpus is never materialized as a Hugging Face Dataset,
 pandas DataFrame, or unbounded Python collection.
+
+ARROW-NATIVE TRANSPORT
+-----------------------
+`pa.RecordBatch` is the canonical batch type for this module — it is what
+flows into worker processes, what the writer receives, and what gets
+sliced across shard boundaries. This avoids the
+Parquet -> dict-of-lists -> ... -> Arrow round-trip that would otherwise
+happen once per batch at write time.
+
+The one place this module still touches plain Python containers is inside
+`_process_batch`, immediately around the calls to `normalize_batch`,
+`ValidationStats.update`, and `enrich_batch`. Those three functions are
+row-wise Python kernels (string strip/upper, IUPAC translate tables,
+taxonomy string splitting) — they are not vectorized Arrow kernels, and
+rewriting them to operate on `pa.Array`/`pyarrow.compute` is out of scope
+here. The `RecordBatch -> dict -> RecordBatch` conversion is therefore
+narrowed to exactly that one boundary, inside the worker process, once per
+batch — not repeated at every stage of the pipeline.
 
 PARALLEL EXECUTION
 -------------------
@@ -39,6 +62,10 @@ In-flight futures are bounded (`inflight_limit`) so memory use stays
 proportional to `batch_size * n_workers`, preserving the bounded-memory
 streaming contract described above -- an unbounded queue of pending
 futures would otherwise defeat the point of streaming.
+
+`pa.RecordBatch` objects are picklable (Arrow IPC under the hood), so they
+cross the `ProcessPoolExecutor` boundary the same way the previous
+dict-of-lists batches did -- no change to the submission/result contract.
 
 Per-worker ValidationStats instances are merged in the main process via
 `merge_validation_stats()`, since dataclass mutation does not cross
@@ -68,7 +95,17 @@ from carbon_enrichment.assets.cpu.validation import (
 from carbon_enrichment.config import CarbonPipelineConfig
 from dagster_hf_datasets import HuggingFaceResource
 
-Batch = dict[str, list[Any]]
+# ============================================================================
+# Batch type
+# ============================================================================
+#
+# pa.RecordBatch is the canonical in-flight batch type for this module.
+# Column-length consistency is an Arrow RecordBatch invariant (every column
+# in a RecordBatch has exactly `num_rows` entries by construction), so the
+# manual `_validate_batch_column_lengths` check the dict-based version
+# needed is no longer meaningful here -- it is structurally guaranteed.
+
+Batch = pa.RecordBatch
 
 BatchTransform = Callable[
     [Batch],
@@ -106,9 +143,11 @@ def iter_batches(
     batch_size: int,
 ) -> Iterator[Batch]:
     """
-    Convert a row-oriented stream into bounded column-oriented batches.
+    Convert a row-oriented stream into bounded pa.RecordBatch objects.
 
-    At most `batch_size` rows are retained by this batching layer.
+    At most `batch_size` rows are retained by this batching layer. Rows are
+    buffered only long enough to build one RecordBatch, then discarded --
+    the bounded-memory contract is unchanged from the dict-based version.
     """
 
     if batch_size <= 0:
@@ -120,52 +159,34 @@ def iter_batches(
         rows.append(row)
 
         if len(rows) >= batch_size:
-            yield _rows_to_batch(rows)
+            yield _rows_to_record_batch(rows)
 
             rows = []
 
     if rows:
-        yield _rows_to_batch(rows)
+        yield _rows_to_record_batch(rows)
 
 
-def _rows_to_batch(
+def _rows_to_record_batch(
     rows: list[Mapping[str, Any]],
-) -> Batch:
-    """Convert row-oriented records into a column-oriented batch."""
+) -> pa.RecordBatch:
+    """Convert row-oriented records directly into a pa.RecordBatch.
 
-    if not rows:
-        return {}
+    Goes straight from HF row dicts to Arrow -- there is no
+    dict-of-lists intermediate representation held anywhere.
+    """
 
-    columns = rows[0].keys()
+    table = pa.Table.from_pylist(rows)
 
-    return {column: [row.get(column) for row in rows] for column in columns}
+    return table.combine_chunks().to_batches()[0]
 
 
 def _batch_length(
-    batch: Mapping[str, Any],
+    batch: pa.RecordBatch,
 ) -> int:
-    """Return the number of rows in a column-oriented batch."""
+    """Return the number of rows in a RecordBatch."""
 
-    if not batch:
-        return 0
-
-    return len(next(iter(batch.values())))
-
-
-def _validate_batch_column_lengths(
-    batch: Mapping[str, Any],
-) -> None:
-    """
-    Ensure every column in a batch contains the same number of rows.
-    """
-
-    if not batch:
-        return
-
-    lengths = {column: len(values) for column, values in batch.items()}
-
-    if len(set(lengths.values())) > 1:
-        raise RuntimeError(f"Batch columns have inconsistent lengths: {lengths}")
+    return batch.num_rows
 
 
 # ============================================================================
@@ -182,21 +203,29 @@ def _validate_batch_column_lengths(
 
 
 def _process_batch(
-    raw_batch: Batch,
-) -> tuple[Batch, ValidationStats, int]:
+    raw_batch: pa.RecordBatch,
+) -> tuple[pa.RecordBatch, ValidationStats, int]:
     """
     Run normalization, validation, and enrichment for one batch.
 
-    Executed inside a worker process. Returns the enriched batch, a
-    worker-local ValidationStats, and the raw row count (for stats
-    bookkeeping in the parent process).
+    Executed inside a worker process. Returns the enriched batch as a
+    pa.RecordBatch, a worker-local ValidationStats, and the raw row count
+    (for stats bookkeeping in the parent process).
+
+    The RecordBatch -> dict -> RecordBatch conversion below is the single,
+    deliberate boundary crossing in this module -- required because
+    normalize_batch/enrich_batch are row-wise Python kernels, not Arrow
+    compute kernels. It happens once per batch, inside the worker, not
+    repeated at every pipeline stage.
     """
 
-    raw_rows = _batch_length(raw_batch)
+    raw_rows = raw_batch.num_rows
 
-    normalized = normalize_batch(raw_batch)
+    raw_dict = raw_batch.to_pydict()
 
-    normalized_rows = _batch_length(normalized)
+    normalized = normalize_batch(raw_dict)
+
+    normalized_rows = _dict_batch_length(normalized)
 
     if normalized_rows != raw_rows:
         raise RuntimeError(
@@ -204,14 +233,12 @@ def _process_batch(
             f"input={raw_rows}, output={normalized_rows}"
         )
 
-    _validate_batch_column_lengths(normalized)
-
     local_stats = ValidationStats()
     local_stats.update(normalized)
 
     enriched = enrich_batch(normalized)
 
-    enriched_rows = _batch_length(enriched)
+    enriched_rows = _dict_batch_length(enriched)
 
     if enriched_rows != normalized_rows:
         raise RuntimeError(
@@ -219,9 +246,21 @@ def _process_batch(
             f"input={normalized_rows}, output={enriched_rows}"
         )
 
-    _validate_batch_column_lengths(enriched)
+    enriched_batch = pa.Table.from_pydict(enriched).combine_chunks().to_batches()[0]
 
-    return enriched, local_stats, raw_rows
+    return enriched_batch, local_stats, raw_rows
+
+
+def _dict_batch_length(
+    batch: Mapping[str, list[Any]],
+) -> int:
+    """Row count for the dict-of-lists representation used only inside
+    _process_batch, around the normalize/validate/enrich calls."""
+
+    if not batch:
+        return 0
+
+    return len(next(iter(batch.values())))
 
 
 # ============================================================================
@@ -230,7 +269,7 @@ def _process_batch(
 
 
 class ParquetShardWriter:
-    """Write bounded batches into sequential Parquet shards."""
+    """Write bounded pa.RecordBatch objects into sequential Parquet shards."""
 
     def __init__(
         self,
@@ -273,29 +312,25 @@ class ParquetShardWriter:
 
     def write_batch(
         self,
-        batch: Batch,
+        batch: pa.RecordBatch,
     ) -> None:
-        """Write a bounded batch, splitting it across shards if required."""
+        """Write a bounded RecordBatch, splitting it across shards if required."""
 
-        if not batch:
+        if batch.num_rows == 0:
             return
-
-        _validate_batch_column_lengths(batch)
-
-        table = pa.Table.from_pydict(batch)
 
         offset = 0
 
-        while offset < table.num_rows:
+        while offset < batch.num_rows:
             capacity = self.rows_per_shard - self._rows_in_current_shard
 
             take = min(
                 capacity,
-                table.num_rows - offset,
+                batch.num_rows - offset,
             )
 
             self._write_chunk(
-                table.slice(
+                batch.slice(
                     offset,
                     take,
                 )
@@ -305,24 +340,24 @@ class ParquetShardWriter:
 
     def _write_chunk(
         self,
-        table: pa.Table,
+        record_batch: pa.RecordBatch,
     ) -> None:
 
-        if table.num_rows == 0:
+        if record_batch.num_rows == 0:
             return
 
         if self._writer is None:
             self._writer = pq.ParquetWriter(
                 self._shard_path(self._shard_index),
-                table.schema,
+                record_batch.schema,
                 compression=self.compression,
             )
 
-        self._writer.write_table(table)
+        self._writer.write_batch(record_batch)
 
-        self._rows_in_current_shard += table.num_rows
+        self._rows_in_current_shard += record_batch.num_rows
 
-        self._rows_written += table.num_rows
+        self._rows_written += record_batch.num_rows
 
         if self._rows_in_current_shard >= self.rows_per_shard:
             self._close_current_shard()
@@ -393,17 +428,20 @@ def process_stream(
 
     Per-batch work order (executed inside worker processes):
 
-        raw
+        raw (RecordBatch)
          ↓
         normalization
          ↓
         validation
          ↓
         enrichment
+         ↓
+        RecordBatch
 
     The main process handles only: schema check (first batch), streaming
     iteration, submitting batches to the pool, draining completed futures,
-    and Parquet writing.
+    and Parquet writing -- all Arrow-native, no dict-of-lists at this
+    level.
     """
 
     stats = StreamingStats()
@@ -449,9 +487,7 @@ def process_stream(
             for future in futures:
                 enriched, local_stats, _raw_rows = future.result()
 
-                enriched_rows = _batch_length(enriched)
-
-                _validate_batch_column_lengths(enriched)
+                enriched_rows = enriched.num_rows
 
                 stats.rows_normalized += enriched_rows
                 stats.rows_enriched += enriched_rows
@@ -466,12 +502,10 @@ def process_stream(
             stream,
             batch_size=batch_size,
         ):
-            raw_rows = _batch_length(raw_batch)
+            raw_rows = raw_batch.num_rows
 
             if raw_rows == 0:
                 continue
-
-            _validate_batch_column_lengths(raw_batch)
 
             stats.rows_read += raw_rows
 
@@ -480,11 +514,13 @@ def process_stream(
             #
             # Only the first batch needs the blocking schema check. This
             # stays sequential and in the main process, since it is a
-            # cheap, one-time, fail-fast gate.
+            # cheap, one-time, fail-fast gate. validate_schema expects a
+            # column-name Mapping, so it reads the RecordBatch's schema
+            # names directly -- no full dict conversion needed here.
             # --------------------------------------------------------------
 
             if first_batch:
-                validate_schema(raw_batch)
+                validate_schema({name: None for name in raw_batch.schema.names})
 
                 first_batch = False
 
@@ -533,7 +569,8 @@ def process_stream(
         "Streaming Carbon CPU pipeline. Reads the Hugging Face corpus "
         "incrementally, normalizes and validates bounded batches, applies "
         "NumPy CPU enrichment, and writes Parquet shards. Normalization, "
-        "validation, and enrichment run in parallel worker processes."
+        "validation, and enrichment run in parallel worker processes. "
+        "pa.RecordBatch is the canonical in-flight batch type."
     ),
 )
 def carbon_cpu_enriched_sequences(

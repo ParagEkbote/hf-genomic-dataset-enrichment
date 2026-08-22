@@ -2,7 +2,6 @@
 Runtime configuration for the Carbon enrichment pipeline.
 
 Data contracts belong in schema.py.
-Fixed implementation constants belong in constants.py.
 Dagster asset/resource wiring belongs in definitions.py.
 """
 
@@ -54,6 +53,12 @@ class CarbonPipelineConfig(dg.Config):
 
     output_dir: str = ".dagster_hf_storage/carbon_cpu_enriched_sequences"
 
+    # Output of the tokenize_and_tag stage (design doc #14.5) — deliberately
+    # a separate directory from output_dir, not a subdirectory keyed off it,
+    # so a tokenization-stage schema change or bug never requires touching
+    # or re-running the CPU-enriched Parquet shards, and vice versa.
+    tokenized_output_dir: str = ".dagster_hf_storage/carbon_tokenized_corpus"
+
     # ------------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------------
@@ -98,3 +103,5 @@ DEFAULT_ROWS_PER_SHARD: int = 250_000
 DEFAULT_PARQUET_COMPRESSION: str = "zstd"
 
 DEFAULT_OUTPUT_DIR: str = ".dagster_hf_storage/carbon_cpu_enriched_sequences"
+
+DEFAULT_TOKENIZED_OUTPUT_DIR: str = ".dagster_hf_storage/carbon_tokenized_corpus"
