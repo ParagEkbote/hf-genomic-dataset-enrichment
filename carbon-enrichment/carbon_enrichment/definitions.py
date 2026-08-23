@@ -1,7 +1,7 @@
 """
 Dagster definitions for the Carbon enrichment pipeline.
 
-CPU pipeline:
+Pipeline:
 
     Hugging Face Hub
             │
@@ -12,11 +12,8 @@ CPU pipeline:
        bounded batches
             │
             ├── schema validation
-            │
             ├── normalization
-            │
             ├── validation
-            │
             ├── NumPy enrichment
             │
             ▼
@@ -24,16 +21,30 @@ CPU pipeline:
             │
             ▼
     carbon_cpu_enriched_sequences
+            │
+            ▼
+    carbon_tokenized_corpus
+            │
+            ├── token_ids
+            ├── token_mask
+            └── token_length
+            │
+            ▼
+    carbon_gpu_enrichment
+            │
+            ├── carbon_embeddings
+            └── carbon_likelihood_stats
 
 The CPU pipeline uses bounded streaming batches and does not materialize
 the complete Carbon corpus as a Hugging Face Dataset or pandas DataFrame.
 
+The GPU pipeline consumes the checkpointed tokenized corpus and performs
+a single model forward pass per batch to produce both embeddings and
+likelihood statistics.
+
 The Hugging Face integration is provided by dagster-hf-datasets:
 
 - HuggingFaceResource: dataset loading and Hub interaction
-
-The GPU and publishing layers will be added as their corresponding
-milestones become active.
 """
 
 import dagster as dg
@@ -41,17 +52,33 @@ import dagster as dg
 from carbon_enrichment.assets.cpu.streaming import (
     carbon_cpu_enriched_sequences,
 )
+from carbon_enrichment.assets.gpu.embeddings import (
+    carbon_gpu_enrichment,
+)
+from carbon_enrichment.assets.gpu.tokenize_and_tag import (
+    carbon_tokenized_corpus,
+)
 from carbon_enrichment.resources.hf_client import (
     create_huggingface_resource,
 )
+
 
 CPU_ASSETS = [
     carbon_cpu_enriched_sequences,
 ]
 
 
+GPU_ASSETS = [
+    carbon_tokenized_corpus,
+    carbon_gpu_enrichment,
+]
+
+
 defs = dg.Definitions(
-    assets=CPU_ASSETS,
+    assets=[
+        *CPU_ASSETS,
+        *GPU_ASSETS,
+    ],
     resources={
         "hf_resource": create_huggingface_resource(),
     },

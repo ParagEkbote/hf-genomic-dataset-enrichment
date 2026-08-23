@@ -56,6 +56,10 @@ import pyarrow.parquet as pq
 from carbon_enrichment.assets.cpu.streaming import ParquetShardWriter
 from carbon_enrichment.config import CarbonPipelineConfig
 from carbon_enrichment.resources.carbon import CarbonModelResource
+from carbon_enrichment.schema import (
+    GPU_JOIN_KEY,
+    TOKENIZED_CORPUS_COLUMNS,
+)
 
 # ============================================================================
 # Constants
@@ -122,6 +126,27 @@ def merge_tokenization_stats(
             )
 
     return merged
+
+
+def _validate_tokenized_output(
+    batch: pa.RecordBatch,
+) -> None:
+    """Validate the schema contract of the tokenized GPU-stage asset."""
+
+    actual_columns = tuple(batch.schema.names)
+
+    if actual_columns != TOKENIZED_CORPUS_COLUMNS:
+        raise ValueError(
+            "carbon_tokenized_corpus schema mismatch: "
+            f"expected columns {TOKENIZED_CORPUS_COLUMNS}, "
+            f"got {actual_columns}"
+        )
+
+    if GPU_JOIN_KEY not in batch.schema.names:
+        raise ValueError(
+            "carbon_tokenized_corpus is missing the required "
+            f"GPU join key {GPU_JOIN_KEY!r}"
+        )
 
 
 # ============================================================================
@@ -218,6 +243,11 @@ def _tokenize_batch(
 
     stats.rows_read = raw_batch.num_rows
 
+    if GPU_JOIN_KEY not in raw_batch.schema.names:
+        raise ValueError(
+            f"Input batch is missing required join key {GPU_JOIN_KEY!r}"
+        )
+
     sequences = raw_batch.column("sequence")
 
     tagged = _tag_dna(sequences)
@@ -269,13 +299,15 @@ def _tokenize_batch(
 
     output_batch = pa.RecordBatch.from_arrays(
         [
-            raw_batch.column("record_id"),
+            raw_batch.column(GPU_JOIN_KEY),
             token_ids_array,
             token_mask_array,
             token_length_array,
         ],
-        names=["record_id", "token_ids", "token_mask", "token_length"],
+        names=list(TOKENIZED_CORPUS_COLUMNS),
     )
+
+    _validate_tokenized_output(output_batch)
 
     return output_batch, stats
 
@@ -420,10 +452,11 @@ def process_corpus(
     deps=["carbon_cpu_enriched_sequences"],
     description=(
         "Tokenization/tagging pass (design doc #14.5): wraps sequences in "
-        "<dna>...</dna>, filters non-canonical bases to <oov>, truncates "
-        "to a multiple of 6 bases, and tokenizes once with the Carbon "
-        "hybrid 6-mer tokenizer. Writes checkpointed token-ID shards "
-        "independent of both CPU enrichment and GPU-stage assets."
+        "<dna>...</dna> and tokenizes once with the Carbon hybrid 6-mer "
+        "tokenizer. OOV detection and partial trailing-k-mer handling are "
+        "performed by HybridDNATokenizer so valid k-mers are preserved. "
+        "Writes checkpointed token-ID shards independent of both CPU "
+        "enrichment and GPU-stage assets."
     ),
 )
 def carbon_tokenized_corpus(

@@ -67,6 +67,13 @@ from carbon_enrichment.resources.carbon import (
     CarbonModelResource,
 )
 
+from carbon_enrichment.schema import (
+    EMBEDDING_COLUMNS,
+    GPU_JOIN_KEY,
+    LIKELIHOOD_COLUMNS,
+    TOKEN_MASK_PADDING,
+)
+
 # ============================================================================
 # Constants
 # ============================================================================
@@ -129,6 +136,35 @@ def merge_gpu_stats(results: list[GpuEnrichmentStats]) -> GpuEnrichmentStats:
 
     return merged
 
+def _validate_output_columns(
+    batch: pa.RecordBatch,
+    expected_columns: tuple[str, ...],
+    *,
+    output_name: str,
+) -> None:
+    """Validate the column contract of a GPU-derived output batch."""
+
+    actual_columns = tuple(batch.schema.names)
+
+    if actual_columns != expected_columns:
+        raise ValueError(
+            f"{output_name} schema mismatch: "
+            f"expected columns {expected_columns}, "
+            f"got {actual_columns}"
+        )
+
+def _validate_join_key(
+    batch: pa.RecordBatch,
+    *,
+    output_name: str,
+) -> None:
+    """Ensure every GPU-derived output preserves the immutable join key."""
+
+    if GPU_JOIN_KEY not in batch.schema.names:
+        raise ValueError(
+            f"{output_name} is missing required GPU join key "
+            f"{GPU_JOIN_KEY!r}"
+        )
 
 # ============================================================================
 # Bucketing (design doc #1)
@@ -181,7 +217,7 @@ def _group_by_bucket(
 # once, feed the same token stream to every downstream consumer"). Padding
 # is therefore done by hand here, matching exactly what HybridDNATokenizer's
 # own __call__ does internally (right-pad input_ids with pad_token_id,
-# right-pad token_mask with -2) so the two arrays stay index-aligned.
+# right-pad token_mask with TOKEN_MASK_PADDING) so the two arrays stay index-aligned.
 
 
 def _pad_batch(
@@ -190,7 +226,7 @@ def _pad_batch(
     pad_token_id: int,
     max_length: int,
 ) -> tuple[Any, Any]:
-    """Right-pad input_ids (with pad_token_id) and token_mask (with -2)."""
+    """Right-pad input_ids and token_mask using the shared schema contract."""
 
     import torch
 
@@ -202,7 +238,7 @@ def _pad_batch(
 
         if pad_len > 0:
             padded_ids.append(ids + [pad_token_id] * pad_len)
-            padded_masks.append(mask + [-2] * pad_len)
+            padded_masks.append(mask + [TOKEN_MASK_PADDING] * pad_len)
         else:
             padded_ids.append(ids[:max_length])
             padded_masks.append(mask[:max_length])
@@ -254,7 +290,7 @@ def _run_forward_pass(
     # padding is the only thing the model's attention needs to ignore.
     # The finer-grained content-type distinctions (special/oov/kmer/text)
     # live in token_mask and are applied downstream, not fed to the model.
-    attention_mask = (token_mask != -2).to(torch.long)
+    attention_mask = (token_mask != TOKEN_MASK_PADDING).to(torch.long)
 
     with torch.inference_mode():
         outputs = model(
@@ -350,7 +386,7 @@ def _extract_pooled_embeddings(
 
     layer = hidden_states[EMBEDDING_LAYER_INDEX]
 
-    real_token_mask = (token_mask != -2).unsqueeze(-1).to(layer.dtype)
+    real_token_mask = (token_mask != TOKEN_MASK_PADDING).unsqueeze(-1).to(layer.dtype)
 
     summed = (layer * real_token_mask).sum(dim=1)
     counts = real_token_mask.sum(dim=1).clamp(min=1)
@@ -433,8 +469,8 @@ def _run_bucket_batch_with_oom_retry(
                 record_ids = chunk.column("record_id").to_pylist()
 
                 for rid, emb, like in zip(record_ids, embeddings, likelihood_stats):
-                    embedding_rows.append({"record_id": rid, "embedding": emb})
-                    likelihood_rows.append({"record_id": rid, **like})
+                    embedding_rows.append({ GPU_JOIN_KEY: rid, "embedding": emb})
+                    likelihood_rows.append({GPU_JOIN_KEY: rid, **like})
 
                 offset += chunk.num_rows
                 succeeded = True
@@ -470,6 +506,29 @@ def _run_bucket_batch_with_oom_retry(
         if likelihood_rows
         else pa.RecordBatch.from_pylist([], schema=pa.schema([]))
     )
+
+    if embedding_batch.num_rows:
+        _validate_output_columns(
+            embedding_batch,
+            EMBEDDING_COLUMNS,
+            output_name="carbon_embeddings",
+        )
+        _validate_join_key(
+            embedding_batch,
+            output_name="carbon_embeddings",
+        )
+
+        if likelihood_batch.num_rows:
+            _validate_output_columns(
+                likelihood_batch,
+                LIKELIHOOD_COLUMNS,
+                output_name="carbon_likelihood_stats",
+            )
+            _validate_join_key(
+                likelihood_batch,
+                output_name="carbon_likelihood_stats",
+            )
+        
     quarantine_batch = pa.RecordBatch.from_pylist(
         [{"record_id": rid} for rid in quarantined_record_ids]
     ) if quarantined_record_ids else pa.RecordBatch.from_pylist(

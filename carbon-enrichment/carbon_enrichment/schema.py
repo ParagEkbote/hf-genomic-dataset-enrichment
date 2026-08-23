@@ -12,6 +12,8 @@ resources. It defines:
 6. The accepted IUPAC nucleotide alphabet.
 7. Structural taxonomy expectations.
 8. Coordinate expectations.
+9. GPU enrichment output contracts.
+10. GPU token-mask semantics.
 
 Important design principle
 --------------------------
@@ -21,9 +23,14 @@ biological information such as taxonomy.
 
 Derived CPU features and GPU/model-derived features belong to their
 respective processing modules rather than the raw-data contract.
+
+GPU output schemas are declared here only as data contracts: they define
+the columns and shared invariants of materialized GPU assets without
+embedding model-specific computation or feature semantics.
 """
 
 from typing import Final
+
 
 # ============================================================================
 # 1. Hugging Face dataset
@@ -56,7 +63,7 @@ HF_DATASET_SPLIT: Final[str] = "train"
 # it as an invalid split name. Split selection and stream truncation are
 # therefore represented as two separate concerns:
 #
-#     STREAMING_SPLIT   -> which named HF split to open ("train")
+#     STREAMING_SPLIT       -> which named HF split to open ("train")
 #     VALIDATION_LEVEL_ROWS -> how many examples to .take() from it
 #
 # This also makes each tier reproducible: it's tied to an explicit row
@@ -78,6 +85,7 @@ VALIDATION_LEVELS: Final[tuple[str, ...]] = (
     "integration",
     "auth",
 )
+
 
 # ============================================================================
 # 3. Expected raw dataset schema
@@ -221,7 +229,9 @@ GENE_BOUNDARY_PAIRS: Final[tuple[tuple[str, str], ...]] = (
 # tracked separately by enrichment/QC rather than being discarded.
 # ============================================================================
 
-IUPAC_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset("ACGTNRYSWKMBDHV-")
+IUPAC_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset(
+    "ACGTNRYSWKMBDHV-"
+)
 
 CLEAN_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset("ACGT")
 
@@ -271,3 +281,101 @@ COORDINATE_COLUMNS: Final[tuple[str, str]] = (
 )
 
 MIN_COORDINATE_VALUE: Final[int] = 0
+
+
+# ============================================================================
+# 10. GPU enrichment output contracts
+# ============================================================================
+#
+# These define the schemas of materialized GPU/model-derived assets.
+#
+# They are intentionally separate from EXPECTED_COLUMNS because
+# EXPECTED_COLUMNS describes the lossless RAW Carbon dataset contract.
+#
+# GPU stages:
+#
+#     tokenized_corpus
+#         -> token_ids / token_mask / token_length
+#
+#     embeddings
+#         -> embedding vectors
+#
+#     likelihood_stats
+#         -> model likelihood metrics
+#
+# All GPU-derived assets retain record_id so they can be joined back to
+# the CPU-enriched corpus without relying on row position.
+#
+# These tuples define column identity. Precise Arrow/nested types should
+# remain with the implementation until the representation is finalized.
+# ============================================================================
+
+TOKENIZED_CORPUS_COLUMNS: Final[tuple[str, ...]] = (
+    "record_id",
+    "token_ids",
+    "token_mask",
+    "token_length",
+)
+
+EMBEDDING_COLUMNS: Final[tuple[str, ...]] = (
+    "record_id",
+    "embedding",
+)
+
+LIKELIHOOD_COLUMNS: Final[tuple[str, ...]] = (
+    "record_id",
+    "mean_log_prob",
+    "sum_log_prob",
+    "perplexity",
+    "supervised_position_count",
+)
+
+
+# ============================================================================
+# 11. GPU asset join key
+# ============================================================================
+#
+# Every GPU-derived asset must preserve record_id.
+#
+# This provides the stable join key between:
+#
+#     CPU-enriched corpus
+#             |
+#             +---- tokenized corpus
+#             |
+#             +---- embeddings
+#             |
+#             +---- likelihood statistics
+#
+# GPU assets must not depend on row position for alignment.
+# ============================================================================
+
+GPU_JOIN_KEY: Final[str] = "record_id"
+
+
+# ============================================================================
+# 12. GPU token-mask semantics
+# ============================================================================
+#
+# token_mask is NOT a conventional binary attention mask.
+#
+#     -2       padding
+#     -1       BPE/text token
+#      0       DNA special token
+#      1..k    partial/full k-mer contribution length
+#
+# These values are part of the GPU pipeline's data contract and therefore
+# must not be hardcoded independently in downstream stages.
+#
+# The maximum k-mer length is intentionally not defined here because it
+# should come from the tokenizer/model configuration rather than being
+# duplicated as a schema constant.
+# ============================================================================
+
+TOKEN_MASK_PADDING: Final[int] = -2
+
+TOKEN_MASK_BPE_TEXT: Final[int] = -1
+
+TOKEN_MASK_DNA_SPECIAL: Final[int] = 0
+
+TOKEN_MASK_MIN_KMER_LENGTH: Final[int] = 1
