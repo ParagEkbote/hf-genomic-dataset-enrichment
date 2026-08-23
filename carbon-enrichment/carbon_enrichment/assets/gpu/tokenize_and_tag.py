@@ -65,7 +65,6 @@ CANONICAL_BASES = frozenset("ACGT")
 DNA_OPEN_TAG = "<dna>"
 DNA_CLOSE_TAG = "</dna>"
 OOV_TOKEN = "<oov>"
-SIXMER_BLOCK = 6
 MAX_NATIVE_CONTEXT_TOKENS = 32_768  # Carbon-3B native context, design doc #16
 
 # Known-good probe: tokenizing this with the <dna> tag present must yield
@@ -86,7 +85,6 @@ class TokenizationStats:
     rows_read: int = 0
     rows_tokenized: int = 0
     oov_bases_filtered: int = 0
-    rows_truncated_to_6mer: int = 0
     rows_exceeding_native_context: int = 0
     total_token_count: int = 0
     min_token_length: int | None = None
@@ -106,7 +104,6 @@ def merge_tokenization_stats(
         merged.rows_read += r.rows_read
         merged.rows_tokenized += r.rows_tokenized
         merged.oov_bases_filtered += r.oov_bases_filtered
-        merged.rows_truncated_to_6mer += r.rows_truncated_to_6mer
         merged.rows_exceeding_native_context += r.rows_exceeding_native_context
         merged.total_token_count += r.total_token_count
 
@@ -136,94 +133,58 @@ def _assert_dna_mode_active(tokenizer: Any) -> None:
     """
     Fail fast if the tokenizer is not actually in 6-mer <dna> mode.
 
-    Tokenizes a small known sequence with the <dna> tag present and checks
-    that the result does not look like BPE/English-text fallback (e.g. an
-    unexpectedly long token count for a 12-base probe, or the <dna>/</dna>
-    tag strings themselves showing up as multiple BPE sub-tokens instead of
-    being consumed as single special tokens). This is a smoke test, not a
-    substitute for the full staged validation in #22 -- it exists so a
-    misconfigured tokenizer fails on the first row of the first batch, not
-    32M rows later.
+    Unlike a standard AutoTokenizer, <dna>/</dna>/<oov> are NOT registered
+    HF special tokens (they don't appear in tokenizer_config.json's
+    added_tokens_decoder) -- HybridDNATokenizer assigns them custom vocab
+    IDs programmatically in _init_dna_vocab, exposed directly as
+    tokenizer.dna_begin_token_id / .dna_end_token_id. This checks the
+    exact expected token structure rather than a fuzzy token-count
+    heuristic: a clean 12-base sequence, a multiple of k=6, must tokenize
+    to exactly [dna_begin_token_id, kmer_id, kmer_id, dna_end_token_id].
     """
 
     tagged = f"{DNA_OPEN_TAG}{_DNA_MODE_PROBE_SEQUENCE}{DNA_CLOSE_TAG}"
 
     probe_ids = tokenizer(tagged, add_special_tokens=False)["input_ids"]
 
-    # A 12-base sequence in true 6-mer mode tokenizes to 2 content tokens
-    # (two 6-mer blocks) plus the <dna>/</dna> special tokens. BPE fallback
-    # on the same string produces many more sub-word tokens. This bound is
-    # deliberately loose (covers tokenizer-version differences in how the
-    # tags themselves are counted) while still catching a full BPE fallback.
-    if len(probe_ids) > 8:
+    expected_kmer_count = len(_DNA_MODE_PROBE_SEQUENCE) // tokenizer.k
+
+    expected_length = expected_kmer_count + 2  # + dna_begin, dna_end
+
+    correct_structure = (
+        len(probe_ids) == expected_length
+        and probe_ids[0] == tokenizer.dna_begin_token_id
+        and probe_ids[-1] == tokenizer.dna_end_token_id
+        and tokenizer.oov_token_id not in probe_ids
+    )
+
+    if not correct_structure:
         raise RuntimeError(
             "Tokenizer does not appear to be in <dna> 6-mer mode: probe "
-            f"sequence produced {len(probe_ids)} tokens, expected a small "
-            "handful. This usually means the <dna> tag is not registered "
-            "as a special token and the tokenizer has fallen back to BPE "
-            "(English-text) mode -- see design doc #14.5. Refusing to "
-            "tokenize the corpus until this is fixed."
+            f"sequence produced {probe_ids!r}, expected "
+            f"[dna_begin_token_id={tokenizer.dna_begin_token_id}, "
+            f"{expected_kmer_count} kmer id(s), "
+            f"dna_end_token_id={tokenizer.dna_end_token_id}] with no "
+            "<oov> tokens. This usually means the <dna> tag was not "
+            "wrapped correctly or the tokenizer fell back to plain BPE "
+            "-- see design doc #14.5. Refusing to tokenize the corpus "
+            "until this is fixed."
         )
 
 
 # ============================================================================
-# Arrow-native preprocessing (tag / filter / truncate)
+# Arrow-native preprocessing (tag only — see note below)
 # ============================================================================
-
-
-def _filter_to_canonical_acgt(sequences: pa.Array) -> tuple[pa.Array, int]:
-    """
-    Replace any non-canonical base with <oov>, vectorized over the column.
-
-    Returns the filtered column and a count of sequences that contained at
-    least one non-ACGT character (oov_bases_filtered bookkeeping).
-    """
-
-    # pc.utf8_upper first: canonicalization is uppercase-ACGT, matching the
-    # CPU stage's own sequence normalization contract.
-    upper = pc.utf8_upper(sequences)
-
-    # There is no single pyarrow.compute kernel for "is every character in
-    # this fixed set" over a StringArray, so this step is done with a
-    # regex-based replace: any run of characters outside [ACGT] is
-    # collapsed to the OOV token. This keeps the whole column vectorized
-    # (one compute call over N rows) rather than a per-row Python loop.
-    has_non_acgt = pc.match_substring_regex(upper, r"[^ACGT]")
-
-    oov_count = pc.sum(pc.cast(has_non_acgt, pa.int64())).as_py() or 0
-
-    filtered = pc.if_else(
-        has_non_acgt,
-        pa.scalar(OOV_TOKEN),
-        upper,
-    )
-
-    return filtered, oov_count
-
-
-def _truncate_to_6mer(sequences: pa.Array) -> tuple[pa.Array, int]:
-    """
-    Trim each sequence to a multiple of 6 bases, vectorized.
-
-    Prevents the tokenizer from right-padding a trailing partial 6-mer
-    block with A's -- a silent correctness bug per design doc #14.5.
-    Returns the truncated column and a count of rows that were actually
-    shortened (i.e. length was not already a multiple of 6).
-    """
-
-    lengths = pc.utf8_length(sequences)
-
-    remainder = pc.mod(lengths, pa.scalar(SIXMER_BLOCK, type=lengths.type))
-
-    truncated_lengths = pc.subtract(lengths, remainder)
-
-    truncated = pc.utf8_slice_codeunits(sequences, start=0, stop=truncated_lengths)
-
-    truncated_count = pc.sum(
-        pc.cast(pc.greater(remainder, 0), pa.int64())
-    ).as_py() or 0
-
-    return truncated, truncated_count
+#
+# No upstream OOV filtering or 6-mer truncation here. Both were removed
+# after reading tokenizer.py: HybridDNATokenizer._process_dna_sequence
+# already does per-kmer OOV detection (only the offending 6-mer becomes
+# <oov>, not the whole sequence -- our earlier whole-sequence regex
+# collapse was a real bug) and right-pads a trailing partial block with
+# 'A' while tracking valid_length via token_mask (not a silent bug, a
+# deliberate FNS-supervision mechanism -- pre-truncating discarded real
+# trailing bases the tokenizer is designed to handle correctly). See
+# design doc #14.5's revised understanding and _tokenize_batch below.
 
 
 def _tag_dna(sequences: pa.Array) -> pa.Array:
@@ -259,26 +220,41 @@ def _tokenize_batch(
 
     sequences = raw_batch.column("sequence")
 
-    filtered, oov_count = _filter_to_canonical_acgt(sequences)
-    stats.oov_bases_filtered = oov_count
-
-    truncated, truncated_count = _truncate_to_6mer(filtered)
-    stats.rows_truncated_to_6mer = truncated_count
-
-    tagged = _tag_dna(truncated)
+    tagged = _tag_dna(sequences)
 
     # Tokenizer call is the one point that must touch Python str -- no
     # batch-level pyarrow.compute kernel exists for BPE/6-mer tokenization
-    # itself. Token IDs come back out as an Arrow array immediately.
+    # itself. Token IDs and token_mask come back out as Arrow arrays
+    # immediately.
+    #
+    # OOV and partial-trailing-kmer handling are NOT done upstream here --
+    # HybridDNATokenizer._process_dna_sequence already does both correctly
+    # on its own: non-ACGT bases invalidate only the specific 6-mer they
+    # fall in (not the whole sequence), and a trailing partial block is
+    # right-padded with 'A' with valid_length tracked via token_mask, not
+    # silently discarded. An upstream sequence-level OOV filter or 6-mer
+    # truncation would either destroy valid k-mers elsewhere in the
+    # sequence or throw away real trailing bases the tokenizer is designed
+    # to handle. See design doc #14.5 and the tokenizer.py docstring for
+    # the token_mask convention consumed downstream by embeddings.py.
     tagged_list = tagged.to_pylist()
 
     encoded = tokenizer(
         tagged_list,
         add_special_tokens=False,
-    )["input_ids"]
+        return_token_mask=True,
+    )
 
-    token_lengths = [len(ids) for ids in encoded]
+    token_ids_batch = encoded["input_ids"]
+    token_mask_batch = encoded["token_mask"]
 
+    token_lengths = [len(ids) for ids in token_ids_batch]
+
+    oov_count = sum(
+        sum(1 for tid in ids if tid == tokenizer.oov_token_id) for ids in token_ids_batch
+    )
+
+    stats.oov_bases_filtered = oov_count
     stats.total_token_count = sum(token_lengths)
     stats.min_token_length = min(token_lengths) if token_lengths else None
     stats.max_token_length = max(token_lengths) if token_lengths else None
@@ -287,16 +263,18 @@ def _tokenize_batch(
     )
     stats.rows_tokenized = len(token_lengths)
 
-    token_ids_array = pa.array(encoded, type=pa.list_(pa.int32()))
+    token_ids_array = pa.array(token_ids_batch, type=pa.list_(pa.int32()))
+    token_mask_array = pa.array(token_mask_batch, type=pa.list_(pa.int8()))
     token_length_array = pa.array(token_lengths, type=pa.int32())
 
     output_batch = pa.RecordBatch.from_arrays(
         [
             raw_batch.column("record_id"),
             token_ids_array,
+            token_mask_array,
             token_length_array,
         ],
-        names=["record_id", "token_ids", "token_length"],
+        names=["record_id", "token_ids", "token_mask", "token_length"],
     )
 
     return output_batch, stats
@@ -480,8 +458,7 @@ def carbon_tokenized_corpus(
         "Tokenization completed: "
         f"rows={stats.rows_tokenized:,}, "
         f"shards={stats.shards_written:,}, "
-        f"oov_filtered={stats.oov_bases_filtered:,}, "
-        f"truncated_to_6mer={stats.rows_truncated_to_6mer:,}"
+        f"oov_filtered={stats.oov_bases_filtered:,}"
     )
 
     return dg.MaterializeResult(
@@ -489,7 +466,6 @@ def carbon_tokenized_corpus(
             "rows_read": stats.rows_read,
             "rows_tokenized": stats.rows_tokenized,
             "oov_bases_filtered": stats.oov_bases_filtered,
-            "rows_truncated_to_6mer": stats.rows_truncated_to_6mer,
             "rows_exceeding_native_context": stats.rows_exceeding_native_context,
             "min_token_length": stats.min_token_length,
             "max_token_length": stats.max_token_length,

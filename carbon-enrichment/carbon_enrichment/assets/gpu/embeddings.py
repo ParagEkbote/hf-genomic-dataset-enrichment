@@ -172,6 +172,48 @@ def _group_by_bucket(
 
 
 # ============================================================================
+# Padding — manual, since we now carry a parallel token_mask array
+# ============================================================================
+#
+# tokenizer.pad() (the generic PreTrainedTokenizer method) only knows about
+# input_ids/attention_mask -- it has no idea about the FNS token_mask
+# convention tokenize_and_tag.py now writes per design doc #5 ("tokenize
+# once, feed the same token stream to every downstream consumer"). Padding
+# is therefore done by hand here, matching exactly what HybridDNATokenizer's
+# own __call__ does internally (right-pad input_ids with pad_token_id,
+# right-pad token_mask with -2) so the two arrays stay index-aligned.
+
+
+def _pad_batch(
+    token_ids_list: list[list[int]],
+    token_mask_list: list[list[int]],
+    pad_token_id: int,
+    max_length: int,
+) -> tuple[Any, Any]:
+    """Right-pad input_ids (with pad_token_id) and token_mask (with -2)."""
+
+    import torch
+
+    padded_ids = []
+    padded_masks = []
+
+    for ids, mask in zip(token_ids_list, token_mask_list):
+        pad_len = max_length - len(ids)
+
+        if pad_len > 0:
+            padded_ids.append(ids + [pad_token_id] * pad_len)
+            padded_masks.append(mask + [-2] * pad_len)
+        else:
+            padded_ids.append(ids[:max_length])
+            padded_masks.append(mask[:max_length])
+
+    return (
+        torch.tensor(padded_ids, dtype=torch.long),
+        torch.tensor(padded_masks, dtype=torch.int8),
+    )
+
+
+# ============================================================================
 # Single forward pass — the core of #14
 # ============================================================================
 
@@ -180,33 +222,39 @@ def _run_forward_pass(
     model: Any,
     tokenizer: Any,
     token_ids_column: pa.Array,
+    token_mask_column: pa.Array,
     bucket: BucketBatchConfig,
-) -> tuple[Any, Any]:
+) -> tuple[Any, Any, Any, Any]:
     """
     One model(ids, output_hidden_states=True) call for one GPU-batch.
 
-    Returns (logits, hidden_states) as torch tensors. Caller is
-    responsible for extracting required stats and discarding both
-    immediately afterward -- #3 forbids retaining logits beyond the
-    batch, and hidden_states are large enough to warrant the same
-    discipline even though the embedding IS the thing we keep (we keep
-    the pooled embedding, never the raw hidden_states tensor itself
-    beyond this call).
+    Returns (logits, hidden_states, input_ids, token_mask) as torch
+    tensors -- token_mask is returned (not just attention_mask) because
+    likelihood extraction and embedding pooling need different masking
+    rules from the same FNS convention (see _extract_likelihood_stats /
+    _extract_pooled_embeddings below), not just "real vs. padding".
+
+    Caller is responsible for extracting required stats and discarding
+    logits/hidden_states immediately afterward -- #3.
     """
 
     import torch
 
     ids_list = token_ids_column.to_pylist()
+    mask_list = token_mask_column.to_pylist()
 
-    padded = tokenizer.pad(
-        {"input_ids": ids_list},
-        padding="max_length",
-        max_length=bucket.bucket_max_tokens,
-        return_tensors="pt",
+    input_ids, token_mask = _pad_batch(
+        ids_list, mask_list, tokenizer.pad_token_id, bucket.bucket_max_tokens
     )
 
-    input_ids = padded["input_ids"].to(model.device)
-    attention_mask = padded["attention_mask"].to(model.device)
+    input_ids = input_ids.to(model.device)
+    token_mask = token_mask.to(model.device)
+
+    # attention_mask for the model call itself is just "not padding" --
+    # padding is the only thing the model's attention needs to ignore.
+    # The finer-grained content-type distinctions (special/oov/kmer/text)
+    # live in token_mask and are applied downstream, not fed to the model.
+    attention_mask = (token_mask != -2).to(torch.long)
 
     with torch.inference_mode():
         outputs = model(
@@ -215,14 +263,29 @@ def _run_forward_pass(
             output_hidden_states=True,
         )
 
-    return outputs.logits, outputs.hidden_states, attention_mask
+    return outputs.logits, outputs.hidden_states, input_ids, token_mask
 
 
-def _extract_likelihood_stats(logits: Any, input_ids: Any, attention_mask: Any) -> list[dict[str, float]]:
+def _extract_likelihood_stats(
+    logits: Any,
+    input_ids: Any,
+    token_mask: Any,
+) -> list[dict[str, float]]:
     """
     Per-sequence likelihood summary stats from logits, extracted
     immediately -- logits are discarded by the caller right after this
     returns, per #3.
+
+    Masking follows the FNS token_mask convention from tokenizer.py's
+    docstring exactly, not plain attention_mask: positions are included
+    only where token_mask > 0 (valid k-mer content -- 1..k for a partial
+    trailing block, k for a full 6-mer). This excludes padding (-2),
+    non-DNA BPE text (-1, shouldn't occur for pure-DNA input but excluded
+    defensively), AND the <dna>/</dna>/<oov> special tokens (0) --
+    matching exactly what the model's own FNS loss supervises during
+    training. A prior version of this function used attention_mask alone,
+    which would have included the <dna>/</dna>/<oov> special-token
+    positions in the likelihood average; this is the corrected version.
     """
 
     import torch
@@ -230,7 +293,7 @@ def _extract_likelihood_stats(logits: Any, input_ids: Any, attention_mask: Any) 
 
     shift_logits = logits[:, :-1, :]
     shift_labels = input_ids[:, 1:]
-    shift_mask = attention_mask[:, 1:].to(torch.bool)
+    shift_content_mask = (token_mask[:, 1:] > 0)
 
     log_probs = F.log_softmax(shift_logits.float(), dim=-1)
 
@@ -238,9 +301,9 @@ def _extract_likelihood_stats(logits: Any, input_ids: Any, attention_mask: Any) 
         log_probs, dim=2, index=shift_labels.unsqueeze(-1)
     ).squeeze(-1)
 
-    token_log_probs = token_log_probs.masked_fill(~shift_mask, 0.0)
+    token_log_probs = token_log_probs.masked_fill(~shift_content_mask, 0.0)
 
-    seq_lengths = shift_mask.sum(dim=1).clamp(min=1)
+    seq_lengths = shift_content_mask.sum(dim=1).clamp(min=1)
     seq_log_prob_sum = token_log_probs.sum(dim=1)
     mean_log_prob = (seq_log_prob_sum / seq_lengths)
     perplexity = torch.exp(-mean_log_prob)
@@ -252,6 +315,7 @@ def _extract_likelihood_stats(logits: Any, input_ids: Any, attention_mask: Any) 
                 "mean_log_prob": mean_log_prob[i].item(),
                 "sum_log_prob": seq_log_prob_sum[i].item(),
                 "perplexity": perplexity[i].item(),
+                "supervised_position_count": int(seq_lengths[i].item()),
             }
         )
 
@@ -260,10 +324,21 @@ def _extract_likelihood_stats(logits: Any, input_ids: Any, attention_mask: Any) 
 
 def _extract_pooled_embeddings(
     hidden_states: tuple,
-    attention_mask: Any,
+    token_mask: Any,
 ) -> list[list[float]]:
     """
     Mean-pool the selected hidden-state layer over real (non-pad) tokens.
+
+    Deliberately a DIFFERENT mask rule than _extract_likelihood_stats:
+    pooling includes every non-padding position (token_mask != -2) --
+    the <dna>/</dna> boundary special tokens (mask == 0) ARE included
+    here, since they carry structural/positional signal useful to a
+    representation even though they aren't nucleotide content and
+    correctly should NOT count toward a likelihood average. Likelihood
+    asks "how well did the model predict actual bases"; pooling asks
+    "what does the model's internal state for this whole tagged sequence
+    look like" -- two different questions, two different masks over the
+    same token_mask array.
 
     Raw embeddings only -- #9 forbids ever storing/clustering on a
     dimensionality-reduced (e.g. UMAP) representation here; that
@@ -275,10 +350,10 @@ def _extract_pooled_embeddings(
 
     layer = hidden_states[EMBEDDING_LAYER_INDEX]
 
-    mask = attention_mask.unsqueeze(-1).to(layer.dtype)
+    real_token_mask = (token_mask != -2).unsqueeze(-1).to(layer.dtype)
 
-    summed = (layer * mask).sum(dim=1)
-    counts = mask.sum(dim=1).clamp(min=1)
+    summed = (layer * real_token_mask).sum(dim=1)
+    counts = real_token_mask.sum(dim=1).clamp(min=1)
     pooled = summed / counts
 
     return pooled.float().cpu().tolist()
@@ -342,21 +417,14 @@ def _run_bucket_batch_with_oom_retry(
                 break
 
             try:
-                logits, hidden_states, attention_mask = _run_forward_pass(
-                    model, tokenizer, chunk.column("token_ids"), bucket
+                logits, hidden_states, padded_ids, padded_token_mask = _run_forward_pass(
+                    model, tokenizer, chunk.column("token_ids"), chunk.column("token_mask"), bucket
                 )
-
-                padded_ids = tokenizer.pad(
-                    {"input_ids": chunk.column("token_ids").to_pylist()},
-                    padding="max_length",
-                    max_length=bucket.bucket_max_tokens,
-                    return_tensors="pt",
-                )["input_ids"].to(logits.device)
 
                 likelihood_stats = _extract_likelihood_stats(
-                    logits, padded_ids, attention_mask
+                    logits, padded_ids, padded_token_mask
                 )
-                embeddings = _extract_pooled_embeddings(hidden_states, attention_mask)
+                embeddings = _extract_pooled_embeddings(hidden_states, padded_token_mask)
 
                 # #3: discard logits/hidden_states immediately -- nothing
                 # beyond this point holds a reference to either.

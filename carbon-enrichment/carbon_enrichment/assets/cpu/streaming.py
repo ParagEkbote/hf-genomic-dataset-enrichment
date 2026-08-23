@@ -212,20 +212,19 @@ def _process_batch(
     pa.RecordBatch, a worker-local ValidationStats, and the raw row count
     (for stats bookkeeping in the parent process).
 
-    The RecordBatch -> dict -> RecordBatch conversion below is the single,
-    deliberate boundary crossing in this module -- required because
-    normalize_batch/enrich_batch are row-wise Python kernels, not Arrow
-    compute kernels. It happens once per batch, inside the worker, not
-    repeated at every pipeline stage.
+    Per design doc #24, normalize_batch/enrich_batch are now vectorized
+    pyarrow.compute kernels operating on RecordBatch directly -- the
+    RecordBatch -> dict -> RecordBatch boundary this function used to
+    cross for the ENTIRE chain now only exists around the
+    ValidationStats.update call, since validation.py is explicitly out of
+    #24's scope and still expects a dict-of-lists batch.
     """
 
     raw_rows = raw_batch.num_rows
 
-    raw_dict = raw_batch.to_pydict()
+    normalized_batch = normalize_batch(raw_batch)
 
-    normalized = normalize_batch(raw_dict)
-
-    normalized_rows = _dict_batch_length(normalized)
+    normalized_rows = normalized_batch.num_rows
 
     if normalized_rows != raw_rows:
         raise RuntimeError(
@@ -233,12 +232,14 @@ def _process_batch(
             f"input={raw_rows}, output={normalized_rows}"
         )
 
+    # Single remaining dict boundary, scoped to validation only (#24
+    # explicitly excludes validation.py from this vectorization pass).
     local_stats = ValidationStats()
-    local_stats.update(normalized)
+    local_stats.update(normalized_batch.to_pydict())
 
-    enriched = enrich_batch(normalized)
+    enriched_batch = enrich_batch(normalized_batch)
 
-    enriched_rows = _dict_batch_length(enriched)
+    enriched_rows = enriched_batch.num_rows
 
     if enriched_rows != normalized_rows:
         raise RuntimeError(
@@ -246,21 +247,7 @@ def _process_batch(
             f"input={normalized_rows}, output={enriched_rows}"
         )
 
-    enriched_batch = pa.Table.from_pydict(enriched).combine_chunks().to_batches()[0]
-
     return enriched_batch, local_stats, raw_rows
-
-
-def _dict_batch_length(
-    batch: Mapping[str, list[Any]],
-) -> int:
-    """Row count for the dict-of-lists representation used only inside
-    _process_batch, around the normalize/validate/enrich calls."""
-
-    if not batch:
-        return 0
-
-    return len(next(iter(batch.values())))
 
 
 # ============================================================================
