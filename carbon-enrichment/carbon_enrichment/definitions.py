@@ -52,6 +52,9 @@ import dagster as dg
 from carbon_enrichment.assets.cpu.streaming import (
     carbon_cpu_enriched_sequences,
 )
+from carbon_enrichment.resources.carbon import (
+    CarbonModelResource,
+)
 from carbon_enrichment.assets.gpu.embeddings import (
     carbon_gpu_enrichment,
 )
@@ -88,5 +91,6 @@ defs = dg.Definitions(
     ],
     resources={
         "hf_resource": create_huggingface_resource(),
+        "carbon": CarbonModelResource(),
     },
 )

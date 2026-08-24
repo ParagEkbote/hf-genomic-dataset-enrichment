@@ -72,6 +72,8 @@ class CarbonPipelineConfig(dg.Config):
     # model forward pass, they remain separate materialized assets.
     likelihood_output_dir: str = ".dagster_hf_storage/carbon_likelihood_stats"
 
+    pilot_output_dir: str = (".dagster_hf_storage/carbon_pilot_corpus")
+
     # ------------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------------

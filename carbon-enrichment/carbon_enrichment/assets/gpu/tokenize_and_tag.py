@@ -448,7 +448,7 @@ def process_corpus(
     name="carbon_tokenized_corpus",
     group_name="gpu",
     compute_kind="cpu",
-    deps=["carbon_cpu_enriched_sequences"],
+    deps=["carbon_pilot_corpus"],
     description=(
         "Tokenization/tagging pass (design doc #14.5): wraps sequences in "
         "<dna>...</dna> and tokenizes once with the Carbon hybrid 6-mer "
@@ -469,7 +469,7 @@ def carbon_tokenized_corpus(
     context.log.info(f"tokenizer_revision={carbon.tokenizer_revision!r}")
 
     stats = process_corpus(
-        input_dir=config.output_dir,
+        input_dir=config.pilot_output_dir,
         output_dir=config.tokenized_output_dir,
         batch_size=config.batch_size,
         rows_per_shard=config.rows_per_shard,

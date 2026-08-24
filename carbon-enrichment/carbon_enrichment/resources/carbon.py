@@ -49,7 +49,7 @@ What this module deliberately does NOT own
 """
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Final
 
 import dagster as dg
 
@@ -70,7 +70,7 @@ DEFAULT_MODEL_REVISION = "main"
 # of building flash-attn from source.
 DEFAULT_ATTN_IMPLEMENTATION = "kernels-community/flash-attn2"
 
-
+MAX_NATIVE_CONTEXT_TOKENS: Final[int] = 32_768
 # ============================================================================
 # Resource
 # ============================================================================
