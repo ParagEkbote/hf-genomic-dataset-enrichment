@@ -83,6 +83,8 @@ DEFAULT_VALIDATION_LEVEL: Final[str] = "dev"
 
 VALIDATION_LEVELS: Final[tuple[str, ...]] = (
     "dev",
+    "dev_gpu_small",
+    "dev_gpu_medium",
     "integration",
     "auth",
 )
