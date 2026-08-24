@@ -3,19 +3,19 @@
 cpu enrichment:
 
 ```bash
-dagster asset materialize \
+dagster job execute \
   -m carbon_enrichment.definitions \
-  --select carbon_raw_sequences+ \
-  -c config/dev-cpu.yaml
+  -j carbon_cpu_job \
+  -c config/dev-gpu.yaml
 ```
 
 for gpu enrichment:
 
 ```bash
-dagster asset materialize \
+dagster job execute \
   -m carbon_enrichment.definitions \
-  --select carbon_pilot_corpus+ \
-  -c config/dev-gpu.yaml 
+  -j carbon_gpu_job \
+  -c config/dev-gpu.yaml
 ```
 
 | Question type                        | Faceberg | DuckDB | Qdrant | Elasticsearch | LlamaIndex |

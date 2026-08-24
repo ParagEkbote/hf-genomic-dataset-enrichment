@@ -28,7 +28,3 @@ ops:
       batch_size: 128
       rows_per_shard: 5000
       compression: "zstd"
-
-  carbon_likelihood_summary:
-    config:
-      tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
