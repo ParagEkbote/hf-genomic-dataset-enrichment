@@ -30,7 +30,9 @@ class CarbonPipelineConfig(dg.Config):
     # Dataset selection
     # ------------------------------------------------------------------------
 
-    validation_level: Literal["dev","dev_gpu_small","dev_gpu_medium", "integration", "auth"] = DEFAULT_VALIDATION_LEVEL
+    validation_level: Literal[
+        "dev", "dev_gpu_small", "dev_gpu_medium", "integration", "auth"
+    ] = DEFAULT_VALIDATION_LEVEL
 
     # The CPU pipeline is streaming-only.
     streaming: bool = True

@@ -150,9 +150,7 @@ def merge_gpu_stats(results: list[GpuEnrichmentStats]) -> GpuEnrichmentStats:
         merged.rows_read += r.rows_read
         merged.rows_enriched += r.rows_enriched
         merged.rows_quarantined += r.rows_quarantined
-        merged.rows_exceeding_native_context += (
-            r.rows_exceeding_native_context
-        )
+        merged.rows_exceeding_native_context += r.rows_exceeding_native_context
 
         merged.batches_processed += r.batches_processed
         merged.forward_passes += r.forward_passes
@@ -233,10 +231,7 @@ def _group_by_bucket(
 
     token_lengths = record_batch.column("token_length").to_pylist()
 
-    bucket_indices = [
-        _bucket_for(n, buckets).bucket_max_tokens
-        for n in token_lengths
-    ]
+    bucket_indices = [_bucket_for(n, buckets).bucket_max_tokens for n in token_lengths]
 
     grouped: dict[int, pa.RecordBatch] = {}
 
@@ -423,11 +418,7 @@ def _extract_pooled_embeddings(
 
     layer = hidden_states[EMBEDDING_LAYER_INDEX]
 
-    real_token_mask = (
-        (token_mask != TOKEN_MASK_PADDING)
-        .unsqueeze(-1)
-        .to(layer.dtype)
-    )
+    real_token_mask = (token_mask != TOKEN_MASK_PADDING).unsqueeze(-1).to(layer.dtype)
 
     summed = (layer * real_token_mask).sum(dim=1)
     counts = real_token_mask.sum(dim=1).clamp(min=1)
@@ -476,11 +467,7 @@ def _run_bucket_batch_with_oom_retry(
         succeeded = False
 
         for divisor in fractions:
-            chunk_size = (
-                max(1, remaining // divisor)
-                if divisor != n
-                else 1
-            )
+            chunk_size = max(1, remaining // divisor) if divisor != n else 1
 
             chunk = record_batch.slice(
                 offset,
@@ -489,22 +476,15 @@ def _run_bucket_batch_with_oom_retry(
 
             token_lengths = chunk.column("token_length").to_pylist()
 
-            if any(
-                tl > MAX_NATIVE_CONTEXT_TOKENS
-                for tl in token_lengths
-            ):
+            if any(tl > MAX_NATIVE_CONTEXT_TOKENS for tl in token_lengths):
                 # Defensive assertion, not an engineered branch (#16) --
                 # every observed sequence fits native context; anything
                 # over is routed to quarantine rather than chunked further.
                 stats.rows_exceeding_native_context += sum(
-                    1
-                    for tl in token_lengths
-                    if tl > MAX_NATIVE_CONTEXT_TOKENS
+                    1 for tl in token_lengths if tl > MAX_NATIVE_CONTEXT_TOKENS
                 )
 
-                quarantined_record_ids.extend(
-                    chunk.column("record_id").to_pylist()
-                )
+                quarantined_record_ids.extend(chunk.column("record_id").to_pylist())
 
                 offset += chunk.num_rows
                 succeeded = True
@@ -532,9 +512,7 @@ def _run_bucket_batch_with_oom_retry(
                 # batch_size * bucket_max_tokens. Padding can be substantial
                 # within a bucket.
                 stats.tokens_processed += int(
-                    (padded_token_mask != TOKEN_MASK_PADDING)
-                    .sum()
-                    .item()
+                    (padded_token_mask != TOKEN_MASK_PADDING).sum().item()
                 )
 
                 likelihood_stats = _extract_likelihood_stats(
@@ -583,9 +561,7 @@ def _run_bucket_batch_with_oom_retry(
 
                 torch.cuda.empty_cache()
 
-                stats.oom_retries_by_bucket[
-                    bucket.bucket_max_tokens
-                ] = (
+                stats.oom_retries_by_bucket[bucket.bucket_max_tokens] = (
                     stats.oom_retries_by_bucket.get(
                         bucket.bucket_max_tokens,
                         0,
@@ -687,16 +663,12 @@ def iter_tokenized_batches(
     shard_paths = sorted(input_dir.glob("shard-*.parquet"))
 
     if not shard_paths:
-        raise FileNotFoundError(
-            f"No tokenized shards found in {input_dir}"
-        )
+        raise FileNotFoundError(f"No tokenized shards found in {input_dir}")
 
     for shard_path in shard_paths:
         parquet_file = pq.ParquetFile(shard_path)
 
-        for record_batch in parquet_file.iter_batches(
-            batch_size=batch_size
-        ):
+        for record_batch in parquet_file.iter_batches(batch_size=batch_size):
             yield record_batch
 
 
@@ -788,11 +760,7 @@ def process_gpu_enrichment(
             )
 
             for bucket_max, bucket_batch in grouped.items():
-                bucket = next(
-                    b
-                    for b in buckets
-                    if b.bucket_max_tokens == bucket_max
-                )
+                bucket = next(b for b in buckets if b.bucket_max_tokens == bucket_max)
 
                 # Compilation is intentionally NOT wired here yet.
                 # When M3.5 compilation is enabled, the model selected here
@@ -819,9 +787,7 @@ def process_gpu_enrichment(
                     like_writer.write_batch(like_batch)
 
                 if quarantine_batch.num_rows:
-                    quarantine_writer.write_batch(
-                        quarantine_batch
-                    )
+                    quarantine_writer.write_batch(quarantine_batch)
 
                 stats.rows_enriched += emb_batch.num_rows
 
@@ -829,10 +795,7 @@ def process_gpu_enrichment(
 
             now = time.perf_counter()
 
-            if (
-                context is not None
-                and now - last_heartbeat >= 30
-            ):
+            if context is not None and now - last_heartbeat >= 30:
                 elapsed = now - run_start
                 inference_elapsed = now - inference_start
 
@@ -861,18 +824,12 @@ def process_gpu_enrichment(
 
     stats.inference_seconds = time.perf_counter() - inference_start
 
-    stats.peak_memory_allocated_bytes = (
-        torch.cuda.max_memory_allocated()
-    )
-    stats.peak_memory_reserved_bytes = (
-        torch.cuda.max_memory_reserved()
-    )
+    stats.peak_memory_allocated_bytes = torch.cuda.max_memory_allocated()
+    stats.peak_memory_reserved_bytes = torch.cuda.max_memory_reserved()
 
     # Correctness invariant: every input row must have exactly one terminal
     # outcome -- enriched or quarantined.
-    reconciled_rows = (
-        stats.rows_enriched + stats.rows_quarantined
-    )
+    reconciled_rows = stats.rows_enriched + stats.rows_quarantined
 
     if reconciled_rows != stats.rows_read:
         raise RuntimeError(
@@ -943,24 +900,14 @@ def carbon_gpu_enrichment(
     immutable join key (#8) and asserted below.
     """
 
-    context.log.info(
-        f"model_checkpoint={carbon.model_checkpoint!r}"
-    )
-    context.log.info(
-        f"tokenizer_revision={carbon.tokenizer_revision!r}"
-    )
+    context.log.info(f"model_checkpoint={carbon.model_checkpoint!r}")
+    context.log.info(f"tokenizer_revision={carbon.tokenizer_revision!r}")
 
     stats = process_gpu_enrichment(
         input_dir=config.tokenized_output_dir,
-        embeddings_output_dir=(
-            f"{config.tokenized_output_dir}_embeddings"
-        ),
-        likelihood_output_dir=(
-            f"{config.tokenized_output_dir}_likelihood"
-        ),
-        quarantine_output_dir=(
-            f"{config.tokenized_output_dir}_quarantine"
-        ),
+        embeddings_output_dir=(f"{config.tokenized_output_dir}_embeddings"),
+        likelihood_output_dir=(f"{config.tokenized_output_dir}_likelihood"),
+        quarantine_output_dir=(f"{config.tokenized_output_dir}_quarantine"),
         batch_size=config.batch_size,
         rows_per_shard=config.rows_per_shard,
         compression=config.compression,
@@ -976,9 +923,7 @@ def carbon_gpu_enrichment(
         )
 
     if stats.rows_quarantined:
-        context.log.warning(
-            f"{stats.rows_quarantined:,} rows quarantined."
-        )
+        context.log.warning(f"{stats.rows_quarantined:,} rows quarantined.")
 
     tokens_per_second = (
         stats.tokens_processed / stats.inference_seconds
@@ -990,12 +935,8 @@ def carbon_gpu_enrichment(
         "rows_read": stats.rows_read,
         "rows_enriched": stats.rows_enriched,
         "rows_quarantined": stats.rows_quarantined,
-        "rows_exceeding_native_context": (
-            stats.rows_exceeding_native_context
-        ),
-        "oom_retries_by_bucket": dg.MetadataValue.json(
-            stats.oom_retries_by_bucket
-        ),
+        "rows_exceeding_native_context": (stats.rows_exceeding_native_context),
+        "oom_retries_by_bucket": dg.MetadataValue.json(stats.oom_retries_by_bucket),
         "batches_processed": stats.batches_processed,
         "forward_passes": stats.forward_passes,
         "tokens_processed": stats.tokens_processed,
@@ -1003,12 +944,8 @@ def carbon_gpu_enrichment(
         "inference_seconds": stats.inference_seconds,
         "compile_setup_seconds": stats.compile_setup_seconds,
         "warmup_seconds": stats.warmup_seconds,
-        "peak_memory_allocated_bytes": (
-            stats.peak_memory_allocated_bytes
-        ),
-        "peak_memory_reserved_bytes": (
-            stats.peak_memory_reserved_bytes
-        ),
+        "peak_memory_allocated_bytes": (stats.peak_memory_allocated_bytes),
+        "peak_memory_reserved_bytes": (stats.peak_memory_reserved_bytes),
         "model_checkpoint": carbon.model_checkpoint,
         "tokenizer_revision": carbon.tokenizer_revision,
         "kernel_revision": carbon.kernel_revision,

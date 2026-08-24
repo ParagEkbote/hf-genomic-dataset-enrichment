@@ -68,7 +68,6 @@ from typing import Any, Final
 
 import dagster as dg
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -236,21 +235,16 @@ class CarbonModelResource(dg.ConfigurableResource):
 
             load_seconds = time.perf_counter() - load_start
 
-            parameter_count = sum(
-                parameter.numel()
-                for parameter in model.parameters()
-            )
+            parameter_count = sum(parameter.numel() for parameter in model.parameters())
 
             parameter_count_billions = parameter_count / 1e9
 
             parameter_devices = {
-                str(parameter.device)
-                for parameter in model.parameters()
+                str(parameter.device) for parameter in model.parameters()
             }
 
             parameter_dtypes = {
-                str(parameter.dtype)
-                for parameter in model.parameters()
+                str(parameter.dtype) for parameter in model.parameters()
             }
 
             resolved_attention = getattr(
@@ -365,10 +359,7 @@ def _resolve_kernel_revision(
         for loaded in get_loaded_kernels():
             repo_info = loaded.repo_info
 
-            if (
-                repo_info is not None
-                and repo_info.repo_id == attn_implementation
-            ):
+            if repo_info is not None and repo_info.repo_id == attn_implementation:
                 return repo_info.revision
 
         return None
