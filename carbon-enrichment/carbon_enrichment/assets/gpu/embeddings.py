@@ -723,12 +723,12 @@ def carbon_gpu_enrichment(
         "kernel_revision": carbon.kernel_revision,
     }
 
-    yield dg.Output(
+    yield dg.MaterializeResult(
         None,
         output_name="carbon_embeddings",
         metadata={**metadata, "parquet_shards": stats.embedding_shards_written},
     )
-    yield dg.Output(
+    yield dg.MaterializeResult(
         None,
         output_name="carbon_likelihood_stats",
         metadata={**metadata, "parquet_shards": stats.likelihood_shards_written},

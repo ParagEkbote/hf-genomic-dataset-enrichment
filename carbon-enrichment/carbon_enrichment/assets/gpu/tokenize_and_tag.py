@@ -446,7 +446,7 @@ def process_corpus(
 
 @dg.asset(
     name="carbon_tokenized_corpus",
-    group_name="gpu",
+    group_name="cpu",
     compute_kind="cpu",
     deps=["carbon_pilot_corpus"],
     description=(

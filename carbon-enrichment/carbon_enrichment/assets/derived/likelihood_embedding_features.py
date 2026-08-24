@@ -192,13 +192,13 @@ def _summarize_likelihood(likelihood_output_dir: str | Path) -> dict[str, Any]:
 
 @dg.asset(
     name="carbon_likelihood_summary",
-    group_name="gpu",
+    group_name="analysis",
     compute_kind="cpu",
-    deps=["carbon_gpu_enrichment"],
+    deps=["carbon_likelihood_stats"],
     description=(
         "Validates record_id integrity (#8) and summarizes the corpus-wide "
-        "likelihood distribution from carbon_likelihood_stats. Does NOT run "
-        "a model forward pass -- consumes the output of embeddings.py's "
+        "likelihood distribution produced by carbon_likelihood_stats. Does NOT "
+        "run a model forward pass -- consumes the output of embeddings.py's "
         "single shared pass (#14)."
     ),
 )
