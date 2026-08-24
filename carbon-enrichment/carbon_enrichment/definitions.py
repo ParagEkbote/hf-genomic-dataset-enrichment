@@ -6,20 +6,6 @@ Pipeline:
     Hugging Face Hub
             │
             ▼
-    create_carbon_stream()
-            │
-            ▼
-       bounded batches
-            │
-            ├── schema validation
-            ├── normalization
-            ├── validation
-            ├── NumPy enrichment
-            │
-            ▼
-      Parquet shards
-            │
-            ▼
     carbon_cpu_enriched_sequences
             │
             ▼
@@ -28,37 +14,13 @@ Pipeline:
             ▼
     carbon_tokenized_corpus
             │
-            ├── token_ids
-            ├── token_mask
-            └── token_length
-            │
             ▼
     carbon_gpu_enrichment
-            │
             ├── carbon_embeddings
             └── carbon_likelihood_stats
                         │
                         ▼
                 carbon_likelihood_summary
-
-The CPU pipeline uses bounded streaming batches and does not materialize
-the complete Carbon corpus as a Hugging Face Dataset or pandas DataFrame.
-
-The pilot corpus is a stratified subset of the CPU-enriched corpus
-(design doc #22.5), used to bound GPU cost before scaling to the full
-corpus.
-
-The GPU pipeline consumes the checkpointed tokenized corpus and performs
-a single model forward pass per batch to produce both embeddings and
-likelihood statistics.
-
-carbon_likelihood_summary is a CPU/analysis-stage asset that validates
-and summarizes the likelihood stats produced by the GPU pass -- it does
-not run a model forward pass itself (#14).
-
-The Hugging Face integration is provided by dagster-hf-datasets:
-
-- HuggingFaceResource: dataset loading and Hub interaction
 """
 
 import dagster as dg
@@ -85,13 +47,14 @@ from carbon_enrichment.resources.hf_client import (
     create_huggingface_resource,
 )
 
+
 CPU_ASSETS = [
     carbon_cpu_enriched_sequences,
-    carbon_pilot_corpus,
-    carbon_tokenized_corpus,
 ]
 
 GPU_ASSETS = [
+    carbon_pilot_corpus,
+    carbon_tokenized_corpus,
     carbon_gpu_enrichment,
 ]
 
@@ -100,11 +63,49 @@ ANALYSIS_ASSETS = [
 ]
 
 
+# ============================================================================
+# Jobs
+# ============================================================================
+
+carbon_cpu_job = dg.define_asset_job(
+    name="carbon_cpu_job",
+    selection=dg.AssetSelection.keys(
+        "carbon_cpu_enriched_sequences",
+    ),
+)
+
+carbon_gpu_job = dg.define_asset_job(
+    name="carbon_gpu_job",
+    selection=dg.AssetSelection.keys(
+        "carbon_pilot_corpus",
+        "carbon_tokenized_corpus",
+        "carbon_embeddings",
+        "carbon_likelihood_stats",
+    ),
+)
+
+carbon_analysis_job = dg.define_asset_job(
+    name="carbon_analysis_job",
+    selection=dg.AssetSelection.keys(
+        "carbon_likelihood_summary",
+    ),
+)
+
+
+# ============================================================================
+# Definitions
+# ============================================================================
+
 defs = dg.Definitions(
     assets=[
         *CPU_ASSETS,
         *GPU_ASSETS,
         *ANALYSIS_ASSETS,
+    ],
+    jobs=[
+        carbon_cpu_job,
+        carbon_gpu_job,
+        carbon_analysis_job,
     ],
     resources={
         "hf_resource": create_huggingface_resource(),

@@ -29,13 +29,26 @@ Responsibilities
   config values (e.g. `model_checkpoint` for a manifest) never trigger
   a 3B-parameter weight load.
 
+Instrumentation
+---------------
+This resource records model-lifecycle telemetry only:
+- tokenizer load time;
+- model load time;
+- model device and dtype;
+- parameter count;
+- requested/resolved attention implementation;
+- resolved FlashAttention-2 kernel revision.
+
+Inference telemetry such as throughput, forward-pass count, OOM retries,
+and peak CUDA memory belongs to `assets/gpu/embeddings.py`.
+
 What this module deliberately does NOT own
 -------------------------------------------
 - `torch.compile` application with bucket-stable static shapes (#19) --
-  that depends on the M3.5 bucket/batch lookup table, which is asset-
-  level config, not resource-level. `compile_for_buckets()` below is a
-  method the GPU asset calls explicitly at startup with that table; the
-  resource does not compile eagerly on load.
+  that depends on the M3.5 bucket/batch lookup table, which is asset-level
+  config, not resource-level. `compile_for_buckets()` below is a method
+  the GPU asset calls explicitly at startup with that table; the resource
+  does not compile eagerly on load.
 - YaRN long-context config (#16) -- the corpus fits native 32,768-token
   context entirely; YaRN is a defensive/exception path only, wired at
   the call site that needs it, not baked into every model load here.
@@ -48,10 +61,16 @@ What this module deliberately does NOT own
     (tokenizer only)   (tokenizer + model)
 """
 
+import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Final
 
 import dagster as dg
+
+
+logger = logging.getLogger(__name__)
+
 
 # ============================================================================
 # Project defaults
@@ -71,6 +90,8 @@ DEFAULT_MODEL_REVISION = "main"
 DEFAULT_ATTN_IMPLEMENTATION = "kernels-community/flash-attn2"
 
 MAX_NATIVE_CONTEXT_TOKENS: Final[int] = 32_768
+
+
 # ============================================================================
 # Resource
 # ============================================================================
@@ -95,10 +116,7 @@ class CarbonModelResource(dg.ConfigurableResource):
     # ------------------------------------------------------------------------
     # Private, per-process cache. Populated on first access. Dagster's
     # multiprocess executor already isolates each asset's STEP_WORKER
-    # subprocess, and the fork-based ProcessPoolExecutor pools inside
-    # tokenize_and_tag/GPU assets inherit this cache via copy-on-write once
-    # populated in the parent -- see streaming.py / tokenize_and_tag.py for
-    # the fork rationale this depends on.
+    # subprocess.
     # ------------------------------------------------------------------------
 
     _tokenizer_cache: Any = None
@@ -158,13 +176,24 @@ class CarbonModelResource(dg.ConfigurableResource):
         if self._tokenizer_cache is None:
             from transformers import AutoTokenizer
 
+            load_start = time.perf_counter()
+
             self._tokenizer_cache = AutoTokenizer.from_pretrained(
                 self.model_repo,
                 revision=self.model_revision,
                 trust_remote_code=True,
             )
 
+            load_seconds = time.perf_counter() - load_start
+
             self._resolved_tokenizer_revision = self.model_revision
+
+            logger.info(
+                "Carbon tokenizer loaded: "
+                f"repo={self.model_repo!r}, "
+                f"revision={self.model_revision!r}, "
+                f"elapsed={load_seconds:.2f}s"
+            )
 
         return self._tokenizer_cache
 
@@ -176,15 +205,19 @@ class CarbonModelResource(dg.ConfigurableResource):
     def model(self) -> Any:
         """
         Carbon-3B, loaded once per process: bf16, FA2 via Kernels Hub,
-        eval mode. Callers wrap forward passes in
-        `torch.inference_mode()` themselves (#4) -- this resource does
-        not force that context manager globally, since some call sites
-        (e.g. a future fine-tuning path) may legitimately need grads.
+        eval mode.
+
+        Callers wrap forward passes in `torch.inference_mode()` themselves
+        (#4) -- this resource does not force that context manager globally,
+        since some call sites (e.g. a future fine-tuning path) may
+        legitimately need grads.
         """
 
         if self._model_cache is None:
             import torch
             from transformers import AutoModelForCausalLM
+
+            load_start = time.perf_counter()
 
             model = AutoModelForCausalLM.from_pretrained(
                 self.model_repo,
@@ -201,13 +234,54 @@ class CarbonModelResource(dg.ConfigurableResource):
                 self.attn_implementation
             )
 
+            load_seconds = time.perf_counter() - load_start
+
+            parameter_count = sum(
+                parameter.numel()
+                for parameter in model.parameters()
+            )
+
+            parameter_count_billions = parameter_count / 1e9
+
+            parameter_devices = {
+                str(parameter.device)
+                for parameter in model.parameters()
+            }
+
+            parameter_dtypes = {
+                str(parameter.dtype)
+                for parameter in model.parameters()
+            }
+
+            resolved_attention = getattr(
+                model.config,
+                "_attn_implementation",
+                None,
+            )
+
+            logger.info(
+                "Carbon model loaded: "
+                f"repo={self.model_repo!r}, "
+                f"revision={self.model_revision!r}, "
+                f"elapsed={load_seconds:.2f}s, "
+                f"parameters={parameter_count_billions:.3f}B, "
+                f"device={sorted(parameter_devices)}, "
+                f"dtype={sorted(parameter_dtypes)}, "
+                f"attention_requested={self.attn_implementation!r}, "
+                f"attention_resolved={resolved_attention!r}, "
+                f"kernel_revision={self.kernel_revision!r}"
+            )
+
         return self._model_cache
 
     # ------------------------------------------------------------------------
     # torch.compile — explicit, bucket-driven, not eager on load (#19)
     # ------------------------------------------------------------------------
 
-    def compile_for_buckets(self, bucket_batch_config: "BucketBatchConfig") -> Any:
+    def compile_for_buckets(
+        self,
+        bucket_batch_config: "BucketBatchConfig",
+    ) -> Any:
         """
         Apply `torch.compile` with bucket-stable static shapes.
 
@@ -235,7 +309,7 @@ class CarbonModelResource(dg.ConfigurableResource):
 # ============================================================================
 # M3.5 config artifact shape (design doc #15)
 # ============================================================================
-#
+
 # Not populated here -- this is the shape `compile_for_buckets` expects,
 # produced by the (separate) M3.5 calibration step and consumed at GPU
 # asset startup. Defined here only so `compile_for_buckets`'s signature is
@@ -259,7 +333,9 @@ class BucketBatchConfig:
 # ============================================================================
 
 
-def _resolve_kernel_revision(attn_implementation: str) -> str | None:
+def _resolve_kernel_revision(
+    attn_implementation: str,
+) -> str | None:
     """
     Best-effort lookup of the resolved Kernels Hub build for
     `attn_implementation`, for the provenance manifest (#18).
@@ -289,7 +365,10 @@ def _resolve_kernel_revision(attn_implementation: str) -> str | None:
         for loaded in get_loaded_kernels():
             repo_info = loaded.repo_info
 
-            if repo_info is not None and repo_info.repo_id == attn_implementation:
+            if (
+                repo_info is not None
+                and repo_info.repo_id == attn_implementation
+            ):
                 return repo_info.revision
 
         return None
