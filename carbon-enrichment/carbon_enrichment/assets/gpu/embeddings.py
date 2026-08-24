@@ -87,7 +87,7 @@ _FALLBACK_BUCKET_CONFIG = [
         batch_size=8,
         dtype="bfloat16",
         attn_backend="kernels-community/flash-attn2",
-        compile_enabled=False,
+        compile_enabled=True,
     ),
 ]
 

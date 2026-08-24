@@ -30,7 +30,7 @@ class CarbonPipelineConfig(dg.Config):
     # Dataset selection
     # ------------------------------------------------------------------------
 
-    validation_level: Literal["dev", "integration", "auth"] = DEFAULT_VALIDATION_LEVEL
+    validation_level: Literal["dev","dev_gpu_small","dev_gpu_medium", "integration", "auth"] = DEFAULT_VALIDATION_LEVEL
 
     # The CPU pipeline is streaming-only.
     streaming: bool = True
@@ -77,6 +77,13 @@ class CarbonPipelineConfig(dg.Config):
     # Although embeddings and likelihood statistics are produced by the same
     # model forward pass, they remain separate materialized assets.
     likelihood_output_dir: str = ".dagster_hf_storage/carbon_likelihood_stats"
+
+    # Fraction of the bounded validation corpus retained by the deterministic
+    # pilot sampler.
+    pilot_sample_fraction: float = 1.0
+
+    # Seed used by the deterministic per-row hash sampler.
+    pilot_sample_seed: int = 42
 
     pilot_output_dir: str = ".dagster_hf_storage/carbon_pilot_corpus"
 

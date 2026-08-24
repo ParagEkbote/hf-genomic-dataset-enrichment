@@ -7,9 +7,7 @@ build-backend = "hatchling.build"
 name = "carbon-enrichment"
 version = "0.1.0"
 description = "A heterogeneous CPU/GPU-disaggregated data enrichment pipeline for the Carbon pretraining corpus."
-readme = "README.md"
 requires-python = ">=3.11,<3.14"
-license = { file = "LICENSE" }
 authors = [
     { name = "Parag Ekbote" },
 ]
@@ -50,6 +48,7 @@ dependencies = [
     "qdrant-client>=1.16.0",
     "duckdb>=1.0.0",
     "llama-index-core>0.10.0",
+    "torch==2.11.0"
 ]
 
 
