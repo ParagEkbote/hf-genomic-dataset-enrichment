@@ -41,18 +41,15 @@ dependencies = [
     # Hugging Face datasets
     "datasets>=3.0",
     "huggingface-hub>=1.0.0",
-    "kernels",
-    "transformers",
-    "pandas>=2.2",
-    "numpy",
-    # Configuration / validation
-    "pydantic>=2.8,<3.0",
+    "kernels>=0.10.0",
+    "transformers>=5.0.0",
+    "accelerate>=1.0.0",
+    "numpy>=2.5.0",
     "faceberg==0.4.0",
     "elasticsearch>=8.10.0",
     "qdrant-client>=1.16.0",
     "duckdb>=1.0.0",
     "llama-index-core>0.10.0",
-
 ]
 
 
