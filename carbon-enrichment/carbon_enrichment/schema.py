@@ -73,6 +73,8 @@ STREAMING_SPLIT: Final[str] = "train"
 
 VALIDATION_LEVEL_ROWS: Final[dict[str, int]] = {
     "dev": 1000,
+    "dev_gpu_small": 3_000,
+    "dev_gpu_medium": 30_000,
     "integration": 1_000_000,
     "auth": 32_410_000,
 }

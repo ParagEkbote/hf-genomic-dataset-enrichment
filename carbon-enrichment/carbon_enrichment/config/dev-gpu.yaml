@@ -1,0 +1,43 @@
+# dev-gpu.yaml — small-scale end-to-end test (CPU -> pilot -> tokenize -> GPU -> summary)
+
+ops:
+  carbon_cpu_enriched_sequences:
+    config:
+      validation_level: "dev"          # or "integration" for the 30k pass
+      output_dir: ".dagster_hf_storage/carbon_cpu_enriched_sequences"
+      batch_size: 256
+      rows_per_shard: 1000
+      compression: "zstd"
+
+  carbon_pilot_corpus:
+    config:
+      output_dir: ".dagster_hf_storage/carbon_cpu_enriched_sequences"
+      pilot_output_dir: ".dagster_hf_storage/carbon_pilot_corpus"
+      pilot_sample_fraction: 1.0        # keep 100% of the dev slice — you're
+                                         # already bounding size upstream via
+                                         # validation_level, not via the pilot
+                                         # fraction, for a dev/test run
+      pilot_sample_seed: 42
+      batch_size: 256
+      rows_per_shard: 1000
+      compression: "zstd"
+
+  carbon_tokenized_corpus:
+    config:
+      pilot_output_dir: ".dagster_hf_storage/carbon_pilot_corpus"
+      tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
+      batch_size: 256
+      rows_per_shard: 1000
+      compression: "zstd"
+      cpu_workers: 4
+
+  carbon_gpu_enrichment:
+    config:
+      tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
+      batch_size: 64                    # smaller GPU batch than CPU stages
+      rows_per_shard: 1000
+      compression: "zstd"
+
+  carbon_likelihood_summary:
+    config:
+      tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
