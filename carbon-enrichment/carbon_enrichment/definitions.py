@@ -55,19 +55,18 @@ from carbon_enrichment.assets.cpu.streaming import (
 from carbon_enrichment.assets.gpu.embeddings import (
     carbon_gpu_enrichment,
 )
-from carbon_enrichment.assets.gpu.tokenize_and_tag import (
-    carbon_tokenized_corpus,
-)
-from carbon_enrichment.resources.hf_client import (
-    create_huggingface_resource,
-)
 from carbon_enrichment.assets.gpu.likelihood import (
     carbon_likelihood_summary,
 )
 from carbon_enrichment.assets.gpu.sampling import (
     carbon_pilot_corpus,
 )
-
+from carbon_enrichment.assets.gpu.tokenize_and_tag import (
+    carbon_tokenized_corpus,
+)
+from carbon_enrichment.resources.hf_client import (
+    create_huggingface_resource,
+)
 
 CPU_ASSETS = [
     carbon_cpu_enriched_sequences,
@@ -77,7 +76,7 @@ CPU_ASSETS = [
 GPU_ASSETS = [
     carbon_tokenized_corpus,
     carbon_gpu_enrichment,
-    carbon_likelihood_summary, 
+    carbon_likelihood_summary,
     carbon_pilot_corpus,
 ]
 

@@ -244,9 +244,7 @@ def _tokenize_batch(
     stats.rows_read = raw_batch.num_rows
 
     if GPU_JOIN_KEY not in raw_batch.schema.names:
-        raise ValueError(
-            f"Input batch is missing required join key {GPU_JOIN_KEY!r}"
-        )
+        raise ValueError(f"Input batch is missing required join key {GPU_JOIN_KEY!r}")
 
     sequences = raw_batch.column("sequence")
 
@@ -281,7 +279,8 @@ def _tokenize_batch(
     token_lengths = [len(ids) for ids in token_ids_batch]
 
     oov_count = sum(
-        sum(1 for tid in ids if tid == tokenizer.oov_token_id) for ids in token_ids_batch
+        sum(1 for tid in ids if tid == tokenizer.oov_token_id)
+        for ids in token_ids_batch
     )
 
     stats.oov_bases_filtered = oov_count

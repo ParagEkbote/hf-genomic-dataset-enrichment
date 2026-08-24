@@ -48,10 +48,7 @@ Principles applied here (see design doc for full rationale):
 - #23 OOM retry cascade feeds back into the static config as a signal
 """
 
-import multiprocessing
-import os
 from collections.abc import Iterator
-from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -66,7 +63,6 @@ from carbon_enrichment.resources.carbon import (
     BucketBatchConfig,
     CarbonModelResource,
 )
-
 from carbon_enrichment.schema import (
     EMBEDDING_COLUMNS,
     GPU_JOIN_KEY,
@@ -136,6 +132,7 @@ def merge_gpu_stats(results: list[GpuEnrichmentStats]) -> GpuEnrichmentStats:
 
     return merged
 
+
 def _validate_output_columns(
     batch: pa.RecordBatch,
     expected_columns: tuple[str, ...],
@@ -153,6 +150,7 @@ def _validate_output_columns(
             f"got {actual_columns}"
         )
 
+
 def _validate_join_key(
     batch: pa.RecordBatch,
     *,
@@ -162,16 +160,18 @@ def _validate_join_key(
 
     if GPU_JOIN_KEY not in batch.schema.names:
         raise ValueError(
-            f"{output_name} is missing required GPU join key "
-            f"{GPU_JOIN_KEY!r}"
+            f"{output_name} is missing required GPU join key {GPU_JOIN_KEY!r}"
         )
+
 
 # ============================================================================
 # Bucketing (design doc #1)
 # ============================================================================
 
 
-def _bucket_for(token_length: int, buckets: list[BucketBatchConfig]) -> BucketBatchConfig:
+def _bucket_for(
+    token_length: int, buckets: list[BucketBatchConfig]
+) -> BucketBatchConfig:
     """Select the smallest bucket that fits token_length, largest as ceiling."""
 
     for bucket in sorted(buckets, key=lambda b: b.bucket_max_tokens):
@@ -194,9 +194,7 @@ def _group_by_bucket(
 
     token_lengths = record_batch.column("token_length").to_pylist()
 
-    bucket_indices = [
-        _bucket_for(n, buckets).bucket_max_tokens for n in token_lengths
-    ]
+    bucket_indices = [_bucket_for(n, buckets).bucket_max_tokens for n in token_lengths]
 
     grouped: dict[int, pa.RecordBatch] = {}
 
@@ -329,7 +327,7 @@ def _extract_likelihood_stats(
 
     shift_logits = logits[:, :-1, :]
     shift_labels = input_ids[:, 1:]
-    shift_content_mask = (token_mask[:, 1:] > 0)
+    shift_content_mask = token_mask[:, 1:] > 0
 
     log_probs = F.log_softmax(shift_logits.float(), dim=-1)
 
@@ -341,7 +339,7 @@ def _extract_likelihood_stats(
 
     seq_lengths = shift_content_mask.sum(dim=1).clamp(min=1)
     seq_log_prob_sum = token_log_probs.sum(dim=1)
-    mean_log_prob = (seq_log_prob_sum / seq_lengths)
+    mean_log_prob = seq_log_prob_sum / seq_lengths
     perplexity = torch.exp(-mean_log_prob)
 
     results = []
@@ -381,8 +379,6 @@ def _extract_pooled_embeddings(
     transform is visualization-only and happens downstream, never in
     this module.
     """
-
-    import torch
 
     layer = hidden_states[EMBEDDING_LAYER_INDEX]
 
@@ -453,14 +449,22 @@ def _run_bucket_batch_with_oom_retry(
                 break
 
             try:
-                logits, hidden_states, padded_ids, padded_token_mask = _run_forward_pass(
-                    model, tokenizer, chunk.column("token_ids"), chunk.column("token_mask"), bucket
+                logits, hidden_states, padded_ids, padded_token_mask = (
+                    _run_forward_pass(
+                        model,
+                        tokenizer,
+                        chunk.column("token_ids"),
+                        chunk.column("token_mask"),
+                        bucket,
+                    )
                 )
 
                 likelihood_stats = _extract_likelihood_stats(
                     logits, padded_ids, padded_token_mask
                 )
-                embeddings = _extract_pooled_embeddings(hidden_states, padded_token_mask)
+                embeddings = _extract_pooled_embeddings(
+                    hidden_states, padded_token_mask
+                )
 
                 # #3: discard logits/hidden_states immediately -- nothing
                 # beyond this point holds a reference to either.
@@ -469,7 +473,7 @@ def _run_bucket_batch_with_oom_retry(
                 record_ids = chunk.column("record_id").to_pylist()
 
                 for rid, emb, like in zip(record_ids, embeddings, likelihood_stats):
-                    embedding_rows.append({ GPU_JOIN_KEY: rid, "embedding": emb})
+                    embedding_rows.append({GPU_JOIN_KEY: rid, "embedding": emb})
                     likelihood_rows.append({GPU_JOIN_KEY: rid, **like})
 
                 offset += chunk.num_rows
@@ -528,11 +532,13 @@ def _run_bucket_batch_with_oom_retry(
                 likelihood_batch,
                 output_name="carbon_likelihood_stats",
             )
-        
-    quarantine_batch = pa.RecordBatch.from_pylist(
-        [{"record_id": rid} for rid in quarantined_record_ids]
-    ) if quarantined_record_ids else pa.RecordBatch.from_pylist(
-        [], schema=pa.schema([])
+
+    quarantine_batch = (
+        pa.RecordBatch.from_pylist(
+            [{"record_id": rid} for rid in quarantined_record_ids]
+        )
+        if quarantined_record_ids
+        else pa.RecordBatch.from_pylist([], schema=pa.schema([]))
     )
 
     return embedding_batch, likelihood_batch, quarantine_batch
@@ -543,7 +549,9 @@ def _run_bucket_batch_with_oom_retry(
 # ============================================================================
 
 
-def iter_tokenized_batches(input_dir: str | Path, batch_size: int) -> Iterator[pa.RecordBatch]:
+def iter_tokenized_batches(
+    input_dir: str | Path, batch_size: int
+) -> Iterator[pa.RecordBatch]:
     """Stream RecordBatches directly from tokenize_and_tag's output shards."""
 
     input_dir = Path(input_dir)
@@ -598,9 +606,15 @@ def process_gpu_enrichment(
     stats = GpuEnrichmentStats()
 
     with (
-        ParquetShardWriter(embeddings_output_dir, rows_per_shard, compression) as emb_writer,
-        ParquetShardWriter(likelihood_output_dir, rows_per_shard, compression) as like_writer,
-        ParquetShardWriter(quarantine_output_dir, rows_per_shard, compression) as quarantine_writer,
+        ParquetShardWriter(
+            embeddings_output_dir, rows_per_shard, compression
+        ) as emb_writer,
+        ParquetShardWriter(
+            likelihood_output_dir, rows_per_shard, compression
+        ) as like_writer,
+        ParquetShardWriter(
+            quarantine_output_dir, rows_per_shard, compression
+        ) as quarantine_writer,
     ):
         for raw_batch in iter_tokenized_batches(input_dir, batch_size):
             if raw_batch.num_rows == 0:
@@ -613,8 +627,10 @@ def process_gpu_enrichment(
             for bucket_max, bucket_batch in grouped.items():
                 bucket = next(b for b in buckets if b.bucket_max_tokens == bucket_max)
 
-                emb_batch, like_batch, quarantine_batch = _run_bucket_batch_with_oom_retry(
-                    model, tokenizer, bucket_batch, bucket, stats
+                emb_batch, like_batch, quarantine_batch = (
+                    _run_bucket_batch_with_oom_retry(
+                        model, tokenizer, bucket_batch, bucket, stats
+                    )
                 )
 
                 if emb_batch.num_rows:

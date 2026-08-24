@@ -57,7 +57,9 @@ LOW_LIKELIHOOD_PERCENTILE = 1.0  # bottom 1% by mean_log_prob
 # ============================================================================
 
 
-def _read_record_id_column(input_dir: str | Path, column: str = "record_id") -> pa.Array:
+def _read_record_id_column(
+    input_dir: str | Path, column: str = "record_id"
+) -> pa.Array:
     """Read just the record_id column across every shard in a directory."""
 
     input_dir = Path(input_dir)
@@ -164,9 +166,12 @@ def _summarize_likelihood(likelihood_output_dir: str | Path) -> dict[str, Any]:
 
     perplexity_quantiles = pc.quantile(perplexity, q=[0.5, 0.99]).to_pylist()
 
-    below_threshold = pc.sum(
-        pc.cast(pc.less_equal(mean_log_prob, low_likelihood_threshold), pa.int64())
-    ).as_py() or 0
+    below_threshold = (
+        pc.sum(
+            pc.cast(pc.less_equal(mean_log_prob, low_likelihood_threshold), pa.int64())
+        ).as_py()
+        or 0
+    )
 
     return {
         "rows_summarized": len(mean_log_prob),

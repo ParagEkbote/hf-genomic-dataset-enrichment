@@ -198,9 +198,7 @@ def _batch_sequence_features(
             + third.astype(np.int64)
         )
 
-        row_index = np.broadcast_to(
-            np.arange(n)[:, None], kmer_index.shape
-        )
+        row_index = np.broadcast_to(np.arange(n)[:, None], kmer_index.shape)
 
         flat_valid = valid.ravel()
         flat_kmer = kmer_index.ravel()[flat_valid]
@@ -209,9 +207,11 @@ def _batch_sequence_features(
         combined = flat_row * KMER_VECTOR_SIZE + flat_kmer
 
         flat_counts = np.bincount(combined, minlength=n * KMER_VECTOR_SIZE)
-        kmer_counts_2d = flat_counts[: n * KMER_VECTOR_SIZE].reshape(
-            n, KMER_VECTOR_SIZE
-        ).astype(np.float64)
+        kmer_counts_2d = (
+            flat_counts[: n * KMER_VECTOR_SIZE]
+            .reshape(n, KMER_VECTOR_SIZE)
+            .astype(np.float64)
+        )
 
         valid_kmer_count = valid.sum(axis=1)
         safe_valid_count = np.where(valid_kmer_count > 0, valid_kmer_count, 1)
@@ -327,9 +327,7 @@ def _parse_taxonomy_column(
             continue
 
         row_parts = [
-            trimmed_flat_list[j]
-            for j in range(start, end)
-            if non_empty_mask_np[j]
+            trimmed_flat_list[j] for j in range(start, end) if non_empty_mask_np[j]
         ]
 
         depths.append(len(row_parts))
@@ -423,9 +421,7 @@ def enrich_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
     derived = {
         "gc_content": pa.array(gc_content, type=pa.float64()),
         "gc_skew": pa.array(gc_skew, type=pa.float64()),
-        "sequence_length": pa.array(
-            [len(s) for s in sequences], type=pa.int32()
-        ),
+        "sequence_length": pa.array([len(s) for s in sequences], type=pa.int32()),
         "gene_length": gene_length,
         "shannon_entropy": pa.array(entropy, type=pa.float64()),
         "kmer_frequency_vector": pa.FixedSizeListArray.from_arrays(
