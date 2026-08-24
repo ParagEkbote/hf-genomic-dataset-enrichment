@@ -83,6 +83,9 @@ from typing import Any
 import dagster as dg
 import pyarrow as pa
 import pyarrow.parquet as pq
+from dagster_hf_datasets import HuggingFaceResource
+from datasets import load_dataset
+
 from carbon_enrichment.assets.cpu.enrichment import enrich_batch
 from carbon_enrichment.assets.cpu.ingest import create_carbon_stream
 from carbon_enrichment.assets.cpu.normalization import normalize_batch
@@ -93,7 +96,6 @@ from carbon_enrichment.assets.cpu.validation import (
     validate_schema,
 )
 from carbon_enrichment.config import CarbonPipelineConfig
-from dagster_hf_datasets import HuggingFaceResource
 
 # ============================================================================
 # Batch type
@@ -111,6 +113,69 @@ BatchTransform = Callable[
     [Batch],
     Batch,
 ]
+
+
+def _read_local_parquet(
+    input_dir: str | Path,
+    *,
+    batch_size: int,
+) -> Iterator[Mapping[str, Any]]:
+    """
+    Stream rows from locally materialized CPU-enriched Parquet shards.
+
+    Reads each shard under `input_dir` in filename order via Arrow's
+    batched reader, yielding one row dict at a time. Mirrors the bounded-
+    memory contract used elsewhere in the pipeline -- at most one
+    `batch_size`-sized Arrow batch is held in memory at a time, never a
+    full shard or the full corpus.
+    """
+
+    input_path = Path(input_dir)
+
+    shard_paths = sorted(input_path.glob("*.parquet"))
+
+    if not shard_paths:
+        raise FileNotFoundError(
+            f"No Parquet shards found in {input_path!s} "
+            "(expected carbon_cpu_enriched_sequences to have run first)"
+        )
+
+    for shard_path in shard_paths:
+        parquet_file = pq.ParquetFile(shard_path)
+
+        for record_batch in parquet_file.iter_batches(batch_size=batch_size):
+            yield from record_batch.to_pylist()
+
+
+def _read_hub_dataset(
+    dataset_id: str,
+    *,
+    batch_size: int,
+    revision: str | None = None,
+) -> Iterator[Mapping[str, Any]]:
+    """
+    Stream rows from a Hugging Face Hub dataset without materializing it.
+
+    Uses `load_dataset(..., streaming=True)` so the CPU-enriched corpus is
+    never pulled fully into memory or disk -- consistent with this
+    pipeline's bounded-memory streaming contract. `batch_size` is accepted
+    for interface symmetry with `_read_local_parquet` but is not used to
+    chunk here; row-by-row iteration is left to the caller's own batching
+    (e.g. `iter_batches`), same as the local reader's per-row yield.
+
+    Pin `revision` to a commit SHA for reproducible sampling runs -- the
+    Hub repository at `dataset_id` is mutable, and an unpinned revision
+    means "whatever main currently contains" rather than a fixed input.
+    """
+
+    hub_stream = load_dataset(
+        dataset_id,
+        split="train",
+        streaming=True,
+        revision=revision,
+    )
+
+    yield from hub_stream
 
 
 # ============================================================================

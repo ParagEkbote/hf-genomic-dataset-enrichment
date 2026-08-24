@@ -61,13 +61,17 @@ requirement.
 
 import hashlib
 from collections import defaultdict
-from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import dagster as dg
 import pyarrow as pa
-import pyarrow.parquet as pq
-from carbon_enrichment.assets.cpu.streaming import ParquetShardWriter
+
+from carbon_enrichment.assets.cpu.streaming import (
+    ParquetShardWriter,
+    _read_hub_dataset,
+    _read_local_parquet,
+    iter_batches,
+)
 from carbon_enrichment.config import CarbonPipelineConfig
 
 # ============================================================================
@@ -157,8 +161,9 @@ def _include_row(record_id: str, seed: int, fraction: float) -> bool:
 
 
 def sample_pilot_corpus(
-    input_dir: str | Path,
-    output_dir: str | Path,
+    input_source: str,
+    input_type: Literal["local", "hub"],
+    output_dir: str,
     *,
     fraction: float,
     seed: int,
@@ -172,14 +177,16 @@ def sample_pilot_corpus(
     and accumulate per-stratum counts for both the full corpus and the
     sampled subset -- so representativeness (#22.5) can be validated from
     this same pass, no second pass required.
+
+    Reads via _read_local_parquet or _read_hub_dataset depending on
+    input_type -- both yield row dicts, so the stratification/inclusion
+    logic below is identical regardless of source.
     """
 
-    input_dir = Path(input_dir)
-
-    shard_paths = sorted(input_dir.glob("shard-*.parquet"))
-
-    if not shard_paths:
-        raise FileNotFoundError(f"No CPU-enriched shards found in {input_dir}")
+    if input_type == "hub":
+        row_iter = _read_hub_dataset(input_source, batch_size=batch_size)
+    else:
+        row_iter = _read_local_parquet(input_source, batch_size=batch_size)
 
     full_corpus_counts: dict[tuple, int] = defaultdict(int)
     sampled_counts: dict[tuple, int] = defaultdict(int)
@@ -187,52 +194,52 @@ def sample_pilot_corpus(
     rows_read = 0
     rows_sampled = 0
     batches_processed = 0
+    shards_written = 0
 
     with ParquetShardWriter(output_dir, rows_per_shard, compression) as writer:
-        for shard_path in shard_paths:
-            parquet_file = pq.ParquetFile(shard_path)
+        for record_batch in iter_batches(row_iter, batch_size=batch_size):
+            record_ids = record_batch.column("record_id").to_pylist()
+            sequence_lengths = record_batch.column("sequence_length").to_pylist()
+            is_coding = record_batch.column("is_coding_region").to_pylist()
+            strands = record_batch.column("strand").to_pylist()
+            taxonomy_domains = record_batch.column("taxonomy_domain").to_pylist()
 
-            for record_batch in parquet_file.iter_batches(batch_size=batch_size):
-                record_ids = record_batch.column("record_id").to_pylist()
-                sequence_lengths = record_batch.column("sequence_length").to_pylist()
-                is_coding = record_batch.column("is_coding_region").to_pylist()
-                strands = record_batch.column("strand").to_pylist()
-                taxonomy_domains = record_batch.column("taxonomy_domain").to_pylist()
+            include_mask = []
 
-                include_mask = []
+            for rid, seq_len, cds, strand, domain in zip(
+                record_ids, sequence_lengths, is_coding, strands, taxonomy_domains
+            ):
+                key = _stratum_key(seq_len, cds, strand, domain)
 
-                for rid, seq_len, cds, strand, domain in zip(
-                    record_ids, sequence_lengths, is_coding, strands, taxonomy_domains
-                ):
-                    key = _stratum_key(seq_len, cds, strand, domain)
+                full_corpus_counts[key] += 1
 
-                    full_corpus_counts[key] += 1
+                included = _include_row(rid, seed, fraction)
 
-                    included = _include_row(rid, seed, fraction)
+                include_mask.append(included)
 
-                    include_mask.append(included)
+                if included:
+                    sampled_counts[key] += 1
 
-                    if included:
-                        sampled_counts[key] += 1
+            rows_read += record_batch.num_rows
 
-                rows_read += record_batch.num_rows
+            mask_array = pa.array(include_mask)
 
-                mask_array = pa.array(include_mask)
+            sampled_batch = record_batch.filter(mask_array)
 
-                sampled_batch = record_batch.filter(mask_array)
+            if sampled_batch.num_rows:
+                writer.write_batch(sampled_batch)
+                rows_sampled += sampled_batch.num_rows
 
-                if sampled_batch.num_rows:
-                    writer.write_batch(sampled_batch)
-                    rows_sampled += sampled_batch.num_rows
+            batches_processed += 1
 
-                batches_processed += 1
+            if context is not None and batches_processed % 100 == 0:
+                context.log.info(
+                    f"Pilot sampling progress: {rows_read:,} rows read, "
+                    f"{rows_sampled:,} sampled "
+                    f"({rows_sampled / max(rows_read, 1):.1%})"
+                )
 
-                if context is not None and batches_processed % 100 == 0:
-                    context.log.info(
-                        f"Pilot sampling progress: {rows_read:,} rows read, "
-                        f"{rows_sampled:,} sampled "
-                        f"({rows_sampled / max(rows_read, 1):.1%})"
-                    )
+        shards_written = writer.shards_written
 
     drift_report = _representativeness_drift(full_corpus_counts, sampled_counts)
 
@@ -242,7 +249,7 @@ def sample_pilot_corpus(
         "actual_fraction": rows_sampled / rows_read if rows_read else 0.0,
         "target_fraction": fraction,
         "seed": seed,
-        "shards_written": writer.shards_written,
+        "shards_written": shards_written,
         "stratum_count": len(full_corpus_counts),
         "drift_report": drift_report,
     }
@@ -302,15 +309,18 @@ def _representativeness_drift(
     name="carbon_pilot_corpus",
     group_name="cpu",
     compute_kind="cpu",
-    deps=["carbon_cpu_enriched_sequences"],
     description=(
         "Stratified subset of the CPU-enriched corpus for GPU enrichment "
         "(design doc #22.5) -- proportional sampling via a deterministic "
         "per-row hash, not first-N-by-order. Stratifies on a bp-length "
         "proxy (real token length isn't known pre-tokenization), CDS "
-        "flag, strand, and taxonomy rank. Feeds carbon_tokenized_corpus "
-        "instead of the full 32M-row corpus."
+        "flag, strand, and taxonomy rank. Consumes the CPU-enriched "
+        "corpus (local or Hub) and feeds carbon_tokenized_corpus instead "
+        "of the full 32M-row corpus."
     ),
+    # deps=["carbon_cpu_enriched_sequences"] removed: only true when
+    # cpu_enriched_input_type == "local". See input_source_type metadata
+    # below for actual provenance when sourced from the Hub.
 )
 def carbon_pilot_corpus(
     context: dg.AssetExecutionContext,
@@ -318,13 +328,24 @@ def carbon_pilot_corpus(
 ) -> dg.MaterializeResult:
     """Sample a stratified pilot subset of the CPU-enriched corpus."""
 
+    if config.cpu_enriched_input_type == "hub":
+        if not config.cpu_enriched_dataset:
+            raise ValueError(
+                "cpu_enriched_dataset is required when cpu_enriched_input_type='hub'"
+            )
+        input_source = config.cpu_enriched_dataset
+    else:
+        input_source = config.output_dir
+
     context.log.info(
-        f"Sampling pilot corpus: fraction={config.pilot_sample_fraction!r}, "
+        f"Sampling pilot corpus: source_type={config.cpu_enriched_input_type!r}, "
+        f"source={input_source!r}, fraction={config.pilot_sample_fraction!r}, "
         f"seed={config.pilot_sample_seed!r}"
     )
 
     result = sample_pilot_corpus(
-        input_dir=config.output_dir,
+        input_source=input_source,
+        input_type=config.cpu_enriched_input_type,
         output_dir=config.pilot_output_dir,
         fraction=config.pilot_sample_fraction,
         seed=config.pilot_sample_seed,
@@ -352,6 +373,11 @@ def carbon_pilot_corpus(
 
     return dg.MaterializeResult(
         metadata={
+            "input_source_type": config.cpu_enriched_input_type,
+            "input_dataset": config.cpu_enriched_dataset,
+            "input_dir": config.output_dir
+            if config.cpu_enriched_input_type == "local"
+            else None,
             "rows_read": result["rows_read"],
             "rows_sampled": result["rows_sampled"],
             "actual_fraction": round(result["actual_fraction"], 4),

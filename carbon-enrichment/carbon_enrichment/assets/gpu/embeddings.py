@@ -56,6 +56,7 @@ from typing import Any
 import dagster as dg
 import pyarrow as pa
 import pyarrow.parquet as pq
+
 from carbon_enrichment.assets.cpu.streaming import ParquetShardWriter
 from carbon_enrichment.config import CarbonPipelineConfig
 from carbon_enrichment.resources.carbon import (

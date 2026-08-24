@@ -39,6 +39,7 @@ import dagster as dg
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
+
 from carbon_enrichment.config import CarbonPipelineConfig
 
 # ============================================================================

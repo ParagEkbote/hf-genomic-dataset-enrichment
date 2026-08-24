@@ -66,20 +66,20 @@ import dagster as dg
 from carbon_enrichment.assets.cpu.streaming import (
     carbon_cpu_enriched_sequences,
 )
-from carbon_enrichment.resources.carbon import (
-    CarbonModelResource,
+from carbon_enrichment.assets.derived.likelihood_embedding_features import (
+    carbon_likelihood_summary,
 )
 from carbon_enrichment.assets.gpu.embeddings import (
     carbon_gpu_enrichment,
-)
-from carbon_enrichment.assets.derived.likelihood_embedding_features import (
-    carbon_likelihood_summary,
 )
 from carbon_enrichment.assets.gpu.sampling import (
     carbon_pilot_corpus,
 )
 from carbon_enrichment.assets.gpu.tokenize_and_tag import (
     carbon_tokenized_corpus,
+)
+from carbon_enrichment.resources.carbon import (
+    CarbonModelResource,
 )
 from carbon_enrichment.resources.hf_client import (
     create_huggingface_resource,

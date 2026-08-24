@@ -8,6 +8,9 @@ The stream is consumed by the streaming CPU pipeline and is never
 materialized as an intermediate Hugging Face Dataset.
 """
 
+from dagster_hf_datasets import HuggingFaceResource
+from datasets import IterableDataset
+
 from carbon_enrichment.config import CarbonPipelineConfig
 from carbon_enrichment.schema import (
     HF_DATASET_CONFIG,
@@ -15,8 +18,6 @@ from carbon_enrichment.schema import (
     HF_DATASET_SPLIT,
     VALIDATION_LEVEL_ROWS,
 )
-from dagster_hf_datasets import HuggingFaceResource
-from datasets import IterableDataset
 
 
 def create_carbon_stream(

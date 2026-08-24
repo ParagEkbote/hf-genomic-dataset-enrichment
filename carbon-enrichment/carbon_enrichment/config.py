@@ -35,6 +35,12 @@ class CarbonPipelineConfig(dg.Config):
     # The CPU pipeline is streaming-only.
     streaming: bool = True
 
+    cpu_enriched_input_type: Literal["local", "hub"] = "local"
+
+    # Required when cpu_enriched_input_type == "hub", e.g.
+    # "AINovice2005/carbon-cpu-enriched-sequences". Ignored otherwise.
+    cpu_enriched_dataset: str | None = None
+
     # ------------------------------------------------------------------------
     # Processing
     # ------------------------------------------------------------------------
@@ -72,7 +78,7 @@ class CarbonPipelineConfig(dg.Config):
     # model forward pass, they remain separate materialized assets.
     likelihood_output_dir: str = ".dagster_hf_storage/carbon_likelihood_stats"
 
-    pilot_output_dir: str = (".dagster_hf_storage/carbon_pilot_corpus")
+    pilot_output_dir: str = ".dagster_hf_storage/carbon_pilot_corpus"
 
     # ------------------------------------------------------------------------
     # Execution

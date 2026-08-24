@@ -321,7 +321,7 @@ TOKENIZED_CORPUS_COLUMNS: Final[tuple[str, ...]] = (
 EMBEDDING_COLUMNS: Final[tuple[str, ...]] = (
     "record_id",
     "embedding",
-    "embedding_norm", 
+    "embedding_norm",
 )
 
 LIKELIHOOD_COLUMNS: Final[tuple[str, ...]] = (
@@ -330,9 +330,9 @@ LIKELIHOOD_COLUMNS: Final[tuple[str, ...]] = (
     "sum_log_prob",
     "perplexity",
     "supervised_position_count",
-    "min_token_logprob",       
-    "argmin_position",         
-    "per_token_logprob_std",   
+    "min_token_logprob",
+    "argmin_position",
+    "per_token_logprob_std",
 )
 
 

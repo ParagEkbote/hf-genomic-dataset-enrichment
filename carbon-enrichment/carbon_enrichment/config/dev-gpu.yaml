@@ -1,18 +1,14 @@
 ops:
-  carbon_cpu_enriched_sequences:
-    config:
-      validation_level: "dev_gpu_small"
-      output_dir: ".dagster_hf_storage/carbon_cpu_enriched_sequences"
-      batch_size: 256
-      rows_per_shard: 5000
-      compression: "zstd"
 
   carbon_pilot_corpus:
     config:
-      output_dir: ".dagster_hf_storage/carbon_cpu_enriched_sequences"
+      input_dataset: "AINovice2005/carbon-cpu-enriched-sequences"
+      validation_level: "dev_gpu_small"
+
       pilot_output_dir: ".dagster_hf_storage/carbon_pilot_corpus"
       pilot_sample_fraction: 1.0
       pilot_sample_seed: 42
+
       batch_size: 256
       rows_per_shard: 5000
       compression: "zstd"
@@ -21,6 +17,7 @@ ops:
     config:
       pilot_output_dir: ".dagster_hf_storage/carbon_pilot_corpus"
       tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
+
       batch_size: 256
       rows_per_shard: 5000
       compression: "zstd"
@@ -29,6 +26,7 @@ ops:
   carbon_gpu_enrichment:
     config:
       tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
+
       batch_size: 128
       rows_per_shard: 5000
       compression: "zstd"

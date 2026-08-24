@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import dagster as dg
+
 from carbon_enrichment.schema import (
     EXPECTED_COLUMNS,
     GENE_BOUNDARY_PAIRS,
