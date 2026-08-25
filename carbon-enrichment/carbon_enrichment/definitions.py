@@ -81,6 +81,7 @@ carbon_gpu_job = dg.define_asset_job(
         "carbon_embeddings",
         "carbon_likelihood_stats",
     ),
+    executor_def=dg.in_process_executor,
 )
 
 carbon_analysis_job = dg.define_asset_job(
