@@ -1,3 +1,54 @@
+"""
+M4/M5 — Single-pass GPU enrichment: embeddings + likelihood stats.
+
+Design doc #14: Carbon-3B is a stock LlamaForCausalLM. One forward pass
+with output_hidden_states=True yields both `logits` (-> M4 likelihood
+stats) and `hidden_states` (-> M5 embedding pooling). This module owns
+that single forward pass and emits BOTH outputs as one Dagster
+multi_asset -- `likelihood.py` does NOT run its own forward pass; it
+consumes `carbon_likelihood_stats` from here. Running the model twice
+(once per file) would silently violate #14 and double GPU cost for no
+benefit, since both outputs come from the same call.
+
+Pipeline:
+
+    carbon_tokenized_corpus (token_ids, record_id, token_length)
+                │
+                ▼
+          bucket by token_length (#1)
+                │
+                ▼
+    ┌── model(ids, output_hidden_states=True) ──┐
+    │        │                    │              │
+    │     logits              hidden_states      │
+    │        │                    │              │
+    │   likelihood stats     pooled embeddings   │
+    │   (extract, discard     (extract, keep)    │
+    │    logits immediately)                     │
+    └────────────────────────────────────────────┘
+                │                    │
+                ▼                    ▼
+    carbon_likelihood_stats   carbon_embeddings
+    (sharded Parquet)         (sharded Parquet)
+
+Principles applied here (see design doc for full rationale):
+- #1  bucket by token length, not raw bp length
+- #2  GPU batching (bucket-internal) separate from Dagster partitioning
+- #3  never retain logits beyond the batch -- extract stats, discard
+- #4  model.eval() + torch.inference_mode() (eval() lives in
+     resources/carbon.py; inference_mode is applied here per forward call)
+- #6  sharded Parquet output, not one monolithic file
+- #7  checkpoint/manifest at the shard level
+- #8  record_id is the immutable join key -- asserted in/out
+- #9  (downstream, M5.5) cluster on raw embeddings, never UMAP coords --
+     not this module's concern, just don't violate it by e.g. reducing
+     dimensionality here
+- #12 provenance metadata per shard
+- #13 keep corpus-wide ops (NN, clustering) out of this row-wise loop
+- #16 long-sequence exception path is a defensive assertion, not a branch
+- #19 torch.compile requires bucket-stable static shapes
+- #23 OOM retry cascade feeds back into the static config as a signal
+"""
 import logging
 import math
 import time

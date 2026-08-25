@@ -8,3 +8,4 @@ ops:
       compression: zstd
       output_dir: ".dagster_hf_storage/final_enrichment"
       enable_progress: true
+      cpu_workers: 4
