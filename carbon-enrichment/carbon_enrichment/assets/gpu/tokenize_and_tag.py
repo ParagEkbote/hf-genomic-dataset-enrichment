@@ -40,18 +40,17 @@ not a slowdown. `_assert_dna_mode_active` below is a fail-fast, one-time
 per-run check against a known probe sequence, run before any real batch is
 tokenized (feeds the correctness-check stage, design doc #22 step 1).
 """
-
 import multiprocessing
 import os
 from collections.abc import Iterator
-from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import dagster as dg
+import numpy as np
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from carbon_enrichment.assets.cpu.streaming import ParquetShardWriter
@@ -66,16 +65,21 @@ from carbon_enrichment.schema import (
 # Constants
 # ============================================================================
 
-CANONICAL_BASES = frozenset("ACGT")
 DNA_OPEN_TAG = "<dna>"
 DNA_CLOSE_TAG = "</dna>"
-OOV_TOKEN = "<oov>"
-MAX_NATIVE_CONTEXT_TOKENS = 32_768  # Carbon-3B native context, design doc #16
-
-# Known-good probe: tokenizing this with the <dna> tag present must yield
-# 6-mer-mode token ids, not BPE fallback ids. Checked once at pipeline
-# startup -- see _assert_dna_mode_active.
+MAX_NATIVE_CONTEXT_TOKENS = 32_768
 _DNA_MODE_PROBE_SEQUENCE = "ACGTACGTACGT"
+
+
+# ============================================================================
+# Worker initialization
+# ============================================================================
+
+
+def _init_worker_threads() -> None:
+    """Clamp internal C/C++ threadpools inside each forked worker process."""
+    pa.set_cpu_count(1)
+    pa.set_io_cpu_count(1)
 
 
 # ============================================================================
@@ -98,13 +102,9 @@ class TokenizationStats:
     shards_written: int = 0
 
 
-def merge_tokenization_stats(
-    results: list[TokenizationStats],
-) -> TokenizationStats:
+def merge_tokenization_stats(results: list[TokenizationStats]) -> TokenizationStats:
     """Combine per-worker TokenizationStats into one cumulative result."""
-
     merged = TokenizationStats()
-
     for r in results:
         merged.rows_read += r.rows_read
         merged.rows_tokenized += r.rows_tokenized
@@ -125,34 +125,17 @@ def merge_tokenization_stats(
                 if merged.max_token_length is None
                 else max(merged.max_token_length, r.max_token_length)
             )
-
     return merged
 
 
-def _validate_tokenized_output(
-    batch: pa.RecordBatch,
-) -> None:
-    """Validate the schema contract of the tokenized GPU-stage asset."""
-
+def _validate_tokenized_output(batch: pa.RecordBatch) -> None:
     actual_columns = tuple(batch.schema.names)
-
     if actual_columns != TOKENIZED_CORPUS_COLUMNS:
         raise ValueError(
-            "carbon_tokenized_corpus schema mismatch: "
-            f"expected columns {TOKENIZED_CORPUS_COLUMNS}, "
-            f"got {actual_columns}"
+            f"carbon_tokenized_corpus schema mismatch: expected {TOKENIZED_CORPUS_COLUMNS}, got {actual_columns}"
         )
-
     if GPU_JOIN_KEY not in batch.schema.names:
-        raise ValueError(
-            "carbon_tokenized_corpus is missing the required "
-            f"GPU join key {GPU_JOIN_KEY!r}"
-        )
-
-
-# ============================================================================
-# Correctness gate (design doc #14.5, #22 step 1)
-# ============================================================================
+        raise ValueError(f"carbon_tokenized_corpus is missing join key {GPU_JOIN_KEY!r}")
 
 
 def _assert_dna_mode_active(tokenizer: Any) -> None:
@@ -170,12 +153,9 @@ def _assert_dna_mode_active(tokenizer: Any) -> None:
     """
 
     tagged = f"{DNA_OPEN_TAG}{_DNA_MODE_PROBE_SEQUENCE}{DNA_CLOSE_TAG}"
-
     probe_ids = tokenizer(tagged, add_special_tokens=False)["input_ids"]
-
     expected_kmer_count = len(_DNA_MODE_PROBE_SEQUENCE) // tokenizer.k
-
-    expected_length = expected_kmer_count + 2  # + dna_begin, dna_end
+    expected_length = expected_kmer_count + 2
 
     correct_structure = (
         len(probe_ids) == expected_length
@@ -186,87 +166,30 @@ def _assert_dna_mode_active(tokenizer: Any) -> None:
 
     if not correct_structure:
         raise RuntimeError(
-            "Tokenizer does not appear to be in <dna> 6-mer mode: probe "
-            f"sequence produced {probe_ids!r}, expected "
-            f"[dna_begin_token_id={tokenizer.dna_begin_token_id}, "
-            f"{expected_kmer_count} kmer id(s), "
-            f"dna_end_token_id={tokenizer.dna_end_token_id}] with no "
-            "<oov> tokens. This usually means the <dna> tag was not "
-            "wrapped correctly or the tokenizer fell back to plain BPE "
-            "-- see design doc #14.5. Refusing to tokenize the corpus "
-            "until this is fixed."
+            f"Tokenizer not in <dna> 6-mer mode: probe produced {probe_ids!r}, "
+            f"expected [dna_begin={tokenizer.dna_begin_token_id}, {expected_kmer_count} kmers, "
+            f"dna_end={tokenizer.dna_end_token_id}]."
         )
 
 
 # ============================================================================
-# Arrow-native preprocessing (tag only — see note below)
+# Optimized Worker Function
 # ============================================================================
-#
-# No upstream OOV filtering or 6-mer truncation here. Both were removed
-# after reading tokenizer.py: HybridDNATokenizer._process_dna_sequence
-# already does per-kmer OOV detection (only the offending 6-mer becomes
-# <oov>, not the whole sequence -- our earlier whole-sequence regex
-# collapse was a real bug) and right-pads a trailing partial block with
-# 'A' while tracking valid_length via token_mask (not a silent bug, a
-# deliberate FNS-supervision mechanism -- pre-truncating discarded real
-# trailing bases the tokenizer is designed to handle correctly). See
-# design doc #14.5's revised understanding and _tokenize_batch below.
-
-
-def _tag_dna(sequences: pa.Array) -> pa.Array:
-    """Wrap every sequence with <dna>...</dna>, vectorized."""
-
-    return pc.binary_join_element_wise(
-        pa.array([DNA_OPEN_TAG] * len(sequences)),
-        sequences,
-        pa.array([DNA_CLOSE_TAG] * len(sequences)),
-        "",
-    )
-
-
-# ============================================================================
-# Fused worker unit: tag -> filter -> truncate -> tokenize
-# ============================================================================
-#
-# Top-level, picklable function (no closures) for ProcessPoolExecutor. The
-# tokenizer is re-resolved once per worker process (see process_corpus) so
-# forked workers inherit an already-loaded tokenizer rather than each
-# re-initializing it from disk/hub.
 
 
 def _tokenize_batch(
     raw_batch: pa.RecordBatch,
     tokenizer: Any,
 ) -> tuple[pa.RecordBatch, TokenizationStats]:
-    """Tag, filter, truncate, and tokenize one RecordBatch. Runs in a worker."""
-
-    stats = TokenizationStats()
-
-    stats.rows_read = raw_batch.num_rows
+    """Worker task: Vectorized tokenization and direct Arrow construction."""
+    stats = TokenizationStats(rows_read=raw_batch.num_rows)
 
     if GPU_JOIN_KEY not in raw_batch.schema.names:
         raise ValueError(f"Input batch is missing required join key {GPU_JOIN_KEY!r}")
 
-    sequences = raw_batch.column("sequence")
-
-    tagged = _tag_dna(sequences)
-
-    # Tokenizer call is the one point that must touch Python str -- no
-    # batch-level pyarrow.compute kernel exists for BPE/6-mer tokenization
-    # itself. Token IDs and token_mask come back out as Arrow arrays
-    # immediately.
-    #
-    # OOV and partial-trailing-kmer handling are NOT done upstream here --
-    # HybridDNATokenizer._process_dna_sequence already does both correctly
-    # on its own: non-ACGT bases invalidate only the specific 6-mer they
-    # fall in (not the whole sequence), and a trailing partial block is
-    # right-padded with 'A' with valid_length tracked via token_mask, not
-    # silently discarded. An upstream sequence-level OOV filter or 6-mer
-    # truncation would either destroy valid k-mers elsewhere in the
-    # sequence or throw away real trailing bases the tokenizer is designed
-    # to handle. See design doc #14.5 and the tokenizer.py docstring for
-    # the token_mask convention consumed downstream by embeddings.py.
-    tagged_list = tagged.to_pylist()
+    # Direct Python list formatting avoids Arrow join kernel + to_pylist() round-trip
+    raw_seqs = raw_batch.column("sequence").to_pylist()
+    tagged_list = [f"{DNA_OPEN_TAG}{s}{DNA_CLOSE_TAG}" for s in raw_seqs]
 
     encoded = tokenizer(
         tagged_list,
@@ -277,25 +200,23 @@ def _tokenize_batch(
     token_ids_batch = encoded["input_ids"]
     token_mask_batch = encoded["token_mask"]
 
-    token_lengths = [len(ids) for ids in token_ids_batch]
+    token_lengths_np = np.fromiter((len(ids) for ids in token_ids_batch), dtype=np.int32, count=len(token_ids_batch))
 
-    oov_count = sum(
-        sum(1 for tid in ids if tid == tokenizer.oov_token_id)
-        for ids in token_ids_batch
-    )
+    # Fast OOV count computation
+    oov_id = tokenizer.oov_token_id
+    oov_count = sum(ids.count(oov_id) for ids in token_ids_batch)
 
     stats.oov_bases_filtered = oov_count
-    stats.total_token_count = sum(token_lengths)
-    stats.min_token_length = min(token_lengths) if token_lengths else None
-    stats.max_token_length = max(token_lengths) if token_lengths else None
-    stats.rows_exceeding_native_context = sum(
-        1 for n in token_lengths if n > MAX_NATIVE_CONTEXT_TOKENS
-    )
-    stats.rows_tokenized = len(token_lengths)
+    stats.total_token_count = int(token_lengths_np.sum())
+    stats.min_token_length = int(token_lengths_np.min()) if len(token_lengths_np) > 0 else None
+    stats.max_token_length = int(token_lengths_np.max()) if len(token_lengths_np) > 0 else None
+    stats.rows_exceeding_native_context = int((token_lengths_np > MAX_NATIVE_CONTEXT_TOKENS).sum())
+    stats.rows_tokenized = len(token_lengths_np)
 
+    # Convert directly to PyArrow arrays
     token_ids_array = pa.array(token_ids_batch, type=pa.list_(pa.int32()))
     token_mask_array = pa.array(token_mask_batch, type=pa.list_(pa.int8()))
-    token_length_array = pa.array(token_lengths, type=pa.int32())
+    token_length_array = pa.array(token_lengths_np, type=pa.int32())
 
     output_batch = pa.RecordBatch.from_arrays(
         [
@@ -308,12 +229,11 @@ def _tokenize_batch(
     )
 
     _validate_tokenized_output(output_batch)
-
     return output_batch, stats
 
 
 # ============================================================================
-# Batch reading (Arrow-native — reads RecordBatches directly, no dict step)
+# Streaming Batch Reader
 # ============================================================================
 
 
@@ -330,7 +250,6 @@ def iter_cpu_enriched_batches(
     """
 
     input_dir = Path(input_dir)
-
     shard_paths = sorted(input_dir.glob("shard-*.parquet"))
 
     if not shard_paths:
@@ -338,7 +257,6 @@ def iter_cpu_enriched_batches(
 
     for shard_path in shard_paths:
         parquet_file = pq.ParquetFile(shard_path)
-
         for record_batch in parquet_file.iter_batches(
             batch_size=batch_size,
             columns=["record_id", "sequence"],
@@ -347,7 +265,7 @@ def iter_cpu_enriched_batches(
 
 
 # ============================================================================
-# Processing loop
+# Continuous Processing Loop
 # ============================================================================
 
 
@@ -362,86 +280,66 @@ def process_corpus(
     context: dg.AssetExecutionContext | None = None,
     max_workers: int | None = None,
 ) -> TokenizationStats:
-    """
-    Tokenize the CPU-enriched corpus using bounded memory, Arrow-native
-    throughout, checkpointed at the shard level.
-    """
-
-    # Resolve the tokenizer once in the main process before the pool is
-    # created. "fork" (below) inherits the already-loaded tokenizer into
-    # each worker via copy-on-write, so this is not re-loaded per worker --
-    # same rationale streaming.py documents for module reimport avoidance.
     tokenizer = carbon_resource.tokenizer
-
     _assert_dna_mode_active(tokenizer)
 
     n_workers = max_workers or max(1, (os.cpu_count() or 2) - 1)
+    inflight_limit = n_workers * 3  # Keeps workers fed without excessive IPC queue memory
 
-    inflight_limit = n_workers * 4
-
-    # See streaming.py for the full rationale: Dagster's multiprocess
-    # executor already runs this asset inside its own STEP_WORKER
-    # subprocess. A "spawn"-based pool nested inside that subprocess would
-    # force each worker to reimport carbon_enrichment (and re-resolve the
-    # tokenizer) from scratch, and could fail to find locally/editable-
-    # installed packages. "fork" inherits the parent's already-loaded
-    # modules, sys.path, and the tokenizer object itself, avoiding both
-    # problems. Linux/macOS only -- spawn is the only option on Windows.
     mp_context = multiprocessing.get_context("fork")
-
     validation_results: list[TokenizationStats] = []
+    batches_processed = 0
 
     with (
         ParquetShardWriter(
             output_dir=output_dir,
             rows_per_shard=rows_per_shard,
             compression=compression,
+            compression_level=1,
         ) as writer,
         ProcessPoolExecutor(
             max_workers=n_workers,
             mp_context=mp_context,
+            initializer=_init_worker_threads,
         ) as pool,
     ):
-        pending: list[Future] = []
+        # Dictionary tracking in-flight futures: {Future: submit_order}
+        pending_futures: dict[Future, None] = {}
+        batch_iter = iter_cpu_enriched_batches(input_dir, batch_size)
 
-        def _drain(futures: list[Future]) -> None:
-            for future in futures:
-                token_batch, batch_stats = future.result()
-
-                validation_results.append(batch_stats)
-
-                writer.write_batch(token_batch)
-
-        batches_processed = 0
-
-        for raw_batch in iter_cpu_enriched_batches(input_dir, batch_size):
+        for raw_batch in batch_iter:
             if raw_batch.num_rows == 0:
                 continue
 
-            pending.append(pool.submit(_tokenize_batch, raw_batch, tokenizer))
-
+            future = pool.submit(_tokenize_batch, raw_batch, tokenizer)
+            pending_futures[future] = None
             batches_processed += 1
 
-            if len(pending) >= inflight_limit:
-                _drain(pending)
-                pending = []
+            # When capacity is reached, consume as soon as ANY worker completes
+            while len(pending_futures) >= inflight_limit:
+                done = next(as_completed(pending_futures))
+                pending_futures.pop(done)
+                token_batch, batch_stats = done.result()
+                validation_results.append(batch_stats)
+                writer.write_batch(token_batch)
 
                 if context is not None and batches_processed % 100 == 0:
-                    context.log.info(
-                        f"Tokenization progress: {batches_processed:,} batches submitted"
-                    )
+                    context.log.info(f"Tokenization progress: {batches_processed:,} batches submitted")
 
-        _drain(pending)
+        # Drain all remaining in-flight tasks
+        for done in as_completed(pending_futures):
+            token_batch, batch_stats = done.result()
+            validation_results.append(batch_stats)
+            writer.write_batch(token_batch)
 
     stats = merge_tokenization_stats(validation_results)
     stats.batches_processed = batches_processed
     stats.shards_written = writer.shards_written
-
     return stats
 
 
 # ============================================================================
-# Dagster asset
+# Dagster Asset
 # ============================================================================
 
 
@@ -450,29 +348,19 @@ def process_corpus(
     group_name="cpu",
     compute_kind="cpu",
     deps=["carbon_pilot_corpus"],
-    description=(
-        "Tokenization/tagging pass (design doc #14.5): wraps sequences in "
-        "<dna>...</dna> and tokenizes once with the Carbon hybrid 6-mer "
-        "tokenizer. OOV detection and partial trailing-k-mer handling are "
-        "performed by HybridDNATokenizer so valid k-mers are preserved. "
-        "Writes checkpointed token-ID shards independent of both CPU "
-        "enrichment and GPU-stage assets."
-    ),
+    description="Optimized tokenization/tagging pass with continuous worker streaming.",
 )
 def carbon_tokenized_corpus(
     context: dg.AssetExecutionContext,
     config: CarbonPipelineConfig,
     carbon: CarbonModelResource,
 ) -> dg.MaterializeResult:
-    """Tokenize the CPU-enriched corpus ahead of GPU enrichment."""
-
-    context.log.info("Starting tokenize_and_tag stage.")
-    context.log.info(f"tokenizer_revision={carbon.tokenizer_revision!r}")
+    context.log.info("Starting optimized tokenize_and_tag stage.")
 
     stats = process_corpus(
         input_dir=config.pilot_output_dir,
         output_dir=config.tokenized_output_dir,
-        batch_size=config.batch_size,
+        batch_size=getattr(config, "tokenization_batch_size", 2048),  # Use larger batch sizes (1k-2k) for CPU workers
         rows_per_shard=config.rows_per_shard,
         compression=config.compression,
         carbon_resource=carbon,
@@ -482,16 +370,11 @@ def carbon_tokenized_corpus(
 
     if stats.rows_exceeding_native_context:
         context.log.warning(
-            f"{stats.rows_exceeding_native_context} rows exceeded "
-            f"{MAX_NATIVE_CONTEXT_TOKENS} native-context tokens — see "
-            "design doc #16 (defensive YaRN/quarantine path)."
+            f"{stats.rows_exceeding_native_context} rows exceeded {MAX_NATIVE_CONTEXT_TOKENS} native-context tokens."
         )
 
     context.log.info(
-        "Tokenization completed: "
-        f"rows={stats.rows_tokenized:,}, "
-        f"shards={stats.shards_written:,}, "
-        f"oov_filtered={stats.oov_bases_filtered:,}"
+        f"Tokenization completed: rows={stats.rows_tokenized:,}, shards={stats.shards_written:,}, oov_filtered={stats.oov_bases_filtered:,}"
     )
 
     return dg.MaterializeResult(
@@ -503,9 +386,7 @@ def carbon_tokenized_corpus(
             "min_token_length": stats.min_token_length,
             "max_token_length": stats.max_token_length,
             "mean_token_length": (
-                round(stats.total_token_count / stats.rows_tokenized, 1)
-                if stats.rows_tokenized
-                else None
+                round(stats.total_token_count / stats.rows_tokenized, 1) if stats.rows_tokenized else None
             ),
             "batches_processed": stats.batches_processed,
             "parquet_shards": stats.shards_written,

@@ -2,14 +2,11 @@ ops:
   carbon_pilot_corpus:
     config:
       validation_level: "integration"
-
       cpu_enriched_input_type: "hub"
       cpu_enriched_dataset: "AINovice2005/carbon-cpu-enriched-sequences"
-
       pilot_output_dir: ".dagster_hf_storage/carbon_pilot_corpus"
-
-      batch_size: 256
-      rows_per_shard: 5000
+      batch_size: 4096           # Increased from 256 to amortize stream buffering overhead
+      rows_per_shard: 10000       # 10k rows/shard reduces shard fragmentation (324 shards total)
       compression: "zstd"
       streaming: true
 
@@ -17,14 +14,14 @@ ops:
     config:
       pilot_output_dir: ".dagster_hf_storage/carbon_pilot_corpus"
       tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
-      batch_size: 256
-      rows_per_shard: 5000
+      batch_size: 2048           # Increased from 256 to eliminate IPC serialization overhead
+      rows_per_shard: 10000
       compression: "zstd"
-      cpu_workers: 4
+      cpu_workers: 14            # Set to N-2 available CPU cores (scale up from 4 to feed pipeline)
 
   carbon_gpu_enrichment:
     config:
       tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
-      batch_size: 64
-      rows_per_shard: 5000
+      batch_size: 4096        
+      rows_per_shard: 10000
       compression: "zstd"
