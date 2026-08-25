@@ -87,8 +87,11 @@ def sample_sequence_lengths(sample_size: int, chars_per_token: float) -> SampleS
         )
         sys.exit(1)
 
-    print(f"Streaming {sample_size} rows from {HF_DATASET_PATH} "
-          f"({HF_DATASET_CONFIG}/{STREAMING_SPLIT}) ...", file=sys.stderr)
+    print(
+        f"Streaming {sample_size} rows from {HF_DATASET_PATH} "
+        f"({HF_DATASET_CONFIG}/{STREAMING_SPLIT}) ...",
+        file=sys.stderr,
+    )
 
     ds = load_dataset(
         HF_DATASET_PATH,
@@ -121,7 +124,9 @@ def sample_sequence_lengths(sample_size: int, chars_per_token: float) -> SampleS
     avg_tokens_per_row = avg_chars * chars_per_token
     max_tokens_per_row = max_chars * chars_per_token
 
-    over_limit = sum(1 for L in lengths if L * chars_per_token > MAX_NATIVE_CONTEXT_TOKENS)
+    over_limit = sum(
+        1 for L in lengths if L * chars_per_token > MAX_NATIVE_CONTEXT_TOKENS
+    )
     pct_over_context_limit = 100.0 * over_limit / len(lengths)
 
     return SampleStats(
@@ -152,28 +157,49 @@ def format_duration(seconds: float) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--sample-size", type=int, default=2000,
-                         help="Number of rows to stream+measure for the length distribution (default: 2000)")
-    parser.add_argument("--chars-per-token", type=float, default=1.0,
-                         help="Conversion ratio from sequence chars to tokens. "
-                              "Default 1.0 assumes ~1 token/nucleotide (conservative). "
-                              "If your tokenizer uses k-mers, this should be < 1.0 "
-                              "(e.g. 0.33 for 3-mers). Check an actual token_length "
-                              "column from carbon_tokenized_corpus to calibrate this.")
-    parser.add_argument("--avg-tokens-per-row", type=float, default=None,
-                         help="Skip live sampling and use this avg tokens/row directly "
-                              "(e.g. 321, derived from your 748-row log: 0.24M/748).")
-    parser.add_argument("--throughput", type=float, nargs="+", default=[843.0],
-                         help="One or more measured throughput values in tokens/sec "
-                              "to compare (e.g. --throughput 843 6744 for batch_size=4 "
-                              "vs a new batch_size=64 measurement)")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--sample-size",
+        type=int,
+        default=2000,
+        help="Number of rows to stream+measure for the length distribution (default: 2000)",
+    )
+    parser.add_argument(
+        "--chars-per-token",
+        type=float,
+        default=1.0,
+        help="Conversion ratio from sequence chars to tokens. "
+        "Default 1.0 assumes ~1 token/nucleotide (conservative). "
+        "If your tokenizer uses k-mers, this should be < 1.0 "
+        "(e.g. 0.33 for 3-mers). Check an actual token_length "
+        "column from carbon_tokenized_corpus to calibrate this.",
+    )
+    parser.add_argument(
+        "--avg-tokens-per-row",
+        type=float,
+        default=None,
+        help="Skip live sampling and use this avg tokens/row directly "
+        "(e.g. 321, derived from your 748-row log: 0.24M/748).",
+    )
+    parser.add_argument(
+        "--throughput",
+        type=float,
+        nargs="+",
+        default=[843.0],
+        help="One or more measured throughput values in tokens/sec "
+        "to compare (e.g. --throughput 843 6744 for batch_size=4 "
+        "vs a new batch_size=64 measurement)",
+    )
     args = parser.parse_args()
 
     stats = None
     if args.avg_tokens_per_row is not None:
         avg_tokens_per_row = args.avg_tokens_per_row
-        print(f"Using provided avg tokens/row: {avg_tokens_per_row:.1f} (no sampling performed)\n")
+        print(
+            f"Using provided avg tokens/row: {avg_tokens_per_row:.1f} (no sampling performed)\n"
+        )
     else:
         stats = sample_sequence_lengths(args.sample_size, args.chars_per_token)
         avg_tokens_per_row = stats.avg_tokens_per_row
@@ -188,7 +214,9 @@ def main():
         print(f"chars_per_token used:    {args.chars_per_token}")
         print(f"=> Avg tokens/row:       {avg_tokens_per_row:.1f}")
         print(f"=> Max tokens/row:       {stats.max_tokens_per_row:.1f}")
-        print(f"=> % rows over {MAX_NATIVE_CONTEXT_TOKENS:,} tok context: {stats.pct_over_context_limit:.2f}%")
+        print(
+            f"=> % rows over {MAX_NATIVE_CONTEXT_TOKENS:,} tok context: {stats.pct_over_context_limit:.2f}%"
+        )
         if stats.pct_over_context_limit > 0:
             print("   ^ These rows will need truncation/chunking -- they will NOT")
             print("     fit in a single forward pass at native context length.")
@@ -202,7 +230,7 @@ def main():
 
     for label, rows in ROW_TARGETS.items():
         total_tokens = rows * avg_tokens_per_row
-        print(f"{label:<24}{total_tokens/1e6:>13.1f}M ", end="")
+        print(f"{label:<24}{total_tokens / 1e6:>13.1f}M ", end="")
         for tp in args.throughput:
             wall_sec = total_tokens / tp
             print(f"{format_duration(wall_sec):>18}", end="")
@@ -217,8 +245,10 @@ def main():
 
     print()
     print("=" * 70)
-    print(f"FOCUSED ESTIMATE: 30,000 rows @ {avg_tokens_per_row:.0f} avg tok/row "
-          f"= {thirty_k_tokens/1e6:.1f}M tokens")
+    print(
+        f"FOCUSED ESTIMATE: 30,000 rows @ {avg_tokens_per_row:.0f} avg tok/row "
+        f"= {thirty_k_tokens / 1e6:.1f}M tokens"
+    )
     print("=" * 70)
     print(f"{'Speedup vs base':<20}{'Assumed tok/s':>16}{'Wall time':>16}")
     print("-" * 52)
@@ -228,15 +258,21 @@ def main():
         label = f"{mult}x (batch=4)" if mult == 1 else f"{mult}x"
         print(f"{label:<20}{tp:>16.0f}{format_duration(wall_sec):>16}")
     print()
-    print(f"(base throughput = {base_throughput:.0f} tok/s, from your batch_size=4 log)")
+    print(
+        f"(base throughput = {base_throughput:.0f} tok/s, from your batch_size=4 log)"
+    )
 
     if stats is not None and stats.pct_over_context_limit > 0:
         print()
-        print(f"WARNING: {stats.pct_over_context_limit:.2f}% of sampled rows exceed "
-              f"{MAX_NATIVE_CONTEXT_TOKENS:,} tokens.")
+        print(
+            f"WARNING: {stats.pct_over_context_limit:.2f}% of sampled rows exceed "
+            f"{MAX_NATIVE_CONTEXT_TOKENS:,} tokens."
+        )
         print("Batch size will be capped by your LONGEST row in a batch, not the")
         print("average -- consider length-bucketed batching so short/long sequences")
-        print("aren't padded together, which wastes compute and lowers effective tok/s.")
+        print(
+            "aren't padded together, which wastes compute and lowers effective tok/s."
+        )
 
     print()
     print("Notes:")

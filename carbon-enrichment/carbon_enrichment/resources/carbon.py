@@ -60,6 +60,7 @@ What this module deliberately does NOT own
     tokenize_and_tag   assets/gpu/*
     (tokenizer only)   (tokenizer + model)
 """
+
 """
 M4/M5 — Single-pass GPU enrichment: embeddings + likelihood stats.
 
@@ -88,6 +89,7 @@ MAX_NATIVE_CONTEXT_TOKENS: Final[int] = 32_768
 @dataclass
 class BucketBatchConfig:
     """One row of the M3.5 bucket -> batch-size/dtype/backend lookup table."""
+
     bucket_max_tokens: int
     batch_size: int
     dtype: str
@@ -99,6 +101,7 @@ class BucketBatchConfig:
 def _resolve_kernel_revision(attn_implementation: str) -> str | None:
     try:
         from kernels import get_loaded_kernels
+
         for loaded in get_loaded_kernels():
             repo_info = loaded.repo_info
             if repo_info is not None and repo_info.repo_id == attn_implementation:
@@ -137,6 +140,7 @@ class CarbonModelResource(dg.ConfigurableResource):
     def tokenizer(self) -> Any:
         if self._tokenizer_cache is None:
             from transformers import AutoTokenizer
+
             load_start = time.perf_counter()
             self._tokenizer_cache = AutoTokenizer.from_pretrained(
                 self.model_repo,
@@ -144,7 +148,9 @@ class CarbonModelResource(dg.ConfigurableResource):
                 trust_remote_code=True,
             )
             self._resolved_tokenizer_revision = self.model_revision
-            logger.info(f"Carbon tokenizer loaded in {time.perf_counter() - load_start:.2f}s")
+            logger.info(
+                f"Carbon tokenizer loaded in {time.perf_counter() - load_start:.2f}s"
+            )
         return self._tokenizer_cache
 
     @property
@@ -162,8 +168,12 @@ class CarbonModelResource(dg.ConfigurableResource):
             )
             model = model.to(self.device).eval()
             self._model_cache = model
-            self._resolved_kernel_revision = _resolve_kernel_revision(self.attn_implementation)
-            logger.info(f"Carbon model loaded in {time.perf_counter() - load_start:.2f}s")
+            self._resolved_kernel_revision = _resolve_kernel_revision(
+                self.attn_implementation
+            )
+            logger.info(
+                f"Carbon model loaded in {time.perf_counter() - load_start:.2f}s"
+            )
         return self._model_cache
 
     def compile_for_buckets(
@@ -171,6 +181,7 @@ class CarbonModelResource(dg.ConfigurableResource):
         bucket_configs: list[BucketBatchConfig] | tuple[BucketBatchConfig, ...],
     ) -> Any:
         import torch
+
         compiled_model = torch.compile(
             self.model,
             mode="reduce-overhead",
@@ -182,10 +193,16 @@ class CarbonModelResource(dg.ConfigurableResource):
                 if not cfg.compile_enabled:
                     continue
                 warmup_start = time.perf_counter()
-                dummy_input = torch.zeros((cfg.batch_size, cfg.bucket_max_tokens), dtype=torch.long, device=self.device)
+                dummy_input = torch.zeros(
+                    (cfg.batch_size, cfg.bucket_max_tokens),
+                    dtype=torch.long,
+                    device=self.device,
+                )
                 _ = compiled_model(input_ids=dummy_input)
                 torch.cuda.synchronize()
-                logger.info(f"Compiled bucket={cfg.bucket_max_tokens} (B={cfg.batch_size}) in {time.perf_counter() - warmup_start:.2f}s")
+                logger.info(
+                    f"Compiled bucket={cfg.bucket_max_tokens} (B={cfg.batch_size}) in {time.perf_counter() - warmup_start:.2f}s"
+                )
         return compiled_model
 
 

@@ -40,6 +40,7 @@ not a slowdown. `_assert_dna_mode_active` below is a fail-fast, one-time
 per-run check against a known probe sequence, run before any real batch is
 tokenized (feeds the correctness-check stage, design doc #22 step 1).
 """
+
 import multiprocessing
 import os
 from collections.abc import Iterator
@@ -53,7 +54,10 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from carbon_enrichment.assets.cpu.streaming import ParquetShardWriter
+from carbon_enrichment.assets.cpu.streaming import (
+    ParquetShardWriter,
+    init_worker_threads,
+)
 from carbon_enrichment.config import CarbonPipelineConfig
 from carbon_enrichment.resources.carbon import CarbonModelResource
 from carbon_enrichment.schema import (
@@ -69,17 +73,6 @@ DNA_OPEN_TAG = "<dna>"
 DNA_CLOSE_TAG = "</dna>"
 MAX_NATIVE_CONTEXT_TOKENS = 32_768
 _DNA_MODE_PROBE_SEQUENCE = "ACGTACGTACGT"
-
-
-# ============================================================================
-# Worker initialization
-# ============================================================================
-
-
-def _init_worker_threads() -> None:
-    """Clamp internal C/C++ threadpools inside each forked worker process."""
-    pa.set_cpu_count(1)
-    pa.set_io_cpu_count(1)
 
 
 # ============================================================================
@@ -135,7 +128,9 @@ def _validate_tokenized_output(batch: pa.RecordBatch) -> None:
             f"carbon_tokenized_corpus schema mismatch: expected {TOKENIZED_CORPUS_COLUMNS}, got {actual_columns}"
         )
     if GPU_JOIN_KEY not in batch.schema.names:
-        raise ValueError(f"carbon_tokenized_corpus is missing join key {GPU_JOIN_KEY!r}")
+        raise ValueError(
+            f"carbon_tokenized_corpus is missing join key {GPU_JOIN_KEY!r}"
+        )
 
 
 def _assert_dna_mode_active(tokenizer: Any) -> None:
@@ -200,7 +195,11 @@ def _tokenize_batch(
     token_ids_batch = encoded["input_ids"]
     token_mask_batch = encoded["token_mask"]
 
-    token_lengths_np = np.fromiter((len(ids) for ids in token_ids_batch), dtype=np.int32, count=len(token_ids_batch))
+    token_lengths_np = np.fromiter(
+        (len(ids) for ids in token_ids_batch),
+        dtype=np.int32,
+        count=len(token_ids_batch),
+    )
 
     # Fast OOV count computation
     oov_id = tokenizer.oov_token_id
@@ -208,9 +207,15 @@ def _tokenize_batch(
 
     stats.oov_bases_filtered = oov_count
     stats.total_token_count = int(token_lengths_np.sum())
-    stats.min_token_length = int(token_lengths_np.min()) if len(token_lengths_np) > 0 else None
-    stats.max_token_length = int(token_lengths_np.max()) if len(token_lengths_np) > 0 else None
-    stats.rows_exceeding_native_context = int((token_lengths_np > MAX_NATIVE_CONTEXT_TOKENS).sum())
+    stats.min_token_length = (
+        int(token_lengths_np.min()) if len(token_lengths_np) > 0 else None
+    )
+    stats.max_token_length = (
+        int(token_lengths_np.max()) if len(token_lengths_np) > 0 else None
+    )
+    stats.rows_exceeding_native_context = int(
+        (token_lengths_np > MAX_NATIVE_CONTEXT_TOKENS).sum()
+    )
     stats.rows_tokenized = len(token_lengths_np)
 
     # Convert directly to PyArrow arrays
@@ -284,7 +289,9 @@ def process_corpus(
     _assert_dna_mode_active(tokenizer)
 
     n_workers = max_workers or max(1, (os.cpu_count() or 2) - 1)
-    inflight_limit = n_workers * 3  # Keeps workers fed without excessive IPC queue memory
+    inflight_limit = (
+        n_workers * 3
+    )  # Keeps workers fed without excessive IPC queue memory
 
     mp_context = multiprocessing.get_context("fork")
     validation_results: list[TokenizationStats] = []
@@ -300,7 +307,7 @@ def process_corpus(
         ProcessPoolExecutor(
             max_workers=n_workers,
             mp_context=mp_context,
-            initializer=_init_worker_threads,
+            initializer=init_worker_threads,
         ) as pool,
     ):
         # Dictionary tracking in-flight futures: {Future: submit_order}
@@ -324,7 +331,9 @@ def process_corpus(
                 writer.write_batch(token_batch)
 
                 if context is not None and batches_processed % 100 == 0:
-                    context.log.info(f"Tokenization progress: {batches_processed:,} batches submitted")
+                    context.log.info(
+                        f"Tokenization progress: {batches_processed:,} batches submitted"
+                    )
 
         # Drain all remaining in-flight tasks
         for done in as_completed(pending_futures):
@@ -360,7 +369,9 @@ def carbon_tokenized_corpus(
     stats = process_corpus(
         input_dir=config.pilot_output_dir,
         output_dir=config.tokenized_output_dir,
-        batch_size=getattr(config, "tokenization_batch_size", 2048),  # Use larger batch sizes (1k-2k) for CPU workers
+        batch_size=getattr(
+            config, "tokenization_batch_size", 2048
+        ),  # Use larger batch sizes (1k-2k) for CPU workers
         rows_per_shard=config.rows_per_shard,
         compression=config.compression,
         carbon_resource=carbon,
@@ -386,7 +397,9 @@ def carbon_tokenized_corpus(
             "min_token_length": stats.min_token_length,
             "max_token_length": stats.max_token_length,
             "mean_token_length": (
-                round(stats.total_token_count / stats.rows_tokenized, 1) if stats.rows_tokenized else None
+                round(stats.total_token_count / stats.rows_tokenized, 1)
+                if stats.rows_tokenized
+                else None
             ),
             "batches_processed": stats.batches_processed,
             "parquet_shards": stats.shards_written,

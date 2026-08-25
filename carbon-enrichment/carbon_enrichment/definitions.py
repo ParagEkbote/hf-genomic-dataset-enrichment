@@ -22,6 +22,7 @@ Pipeline:
                         ▼
                 carbon_likelihood_summary
 """
+
 import os
 
 # 1. Disable HF Rust threadpool cloning to prevent deadlock on fork

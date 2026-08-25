@@ -71,6 +71,7 @@ Per-worker ValidationStats instances are merged in the main process via
 `merge_validation_stats()`, since dataclass mutation does not cross
 process boundaries.
 """
+
 import multiprocessing
 import os
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -110,7 +111,7 @@ BatchTransform = Callable[[Batch], Batch]
 # ============================================================================
 
 
-def _init_worker_threads() -> None:
+def init_worker_threads() -> None:
     """Clamp internal C/C++ threadpools inside each forked worker process."""
     pa.set_cpu_count(1)
     pa.set_io_cpu_count(1)
@@ -331,6 +332,7 @@ class ParquetShardWriter:
         self._shard_index = 0
         self._rows_written = 0
         self._shards_written = 0
+        self._is_closed = False
 
     @property
     def rows_written(self) -> int:
@@ -341,28 +343,30 @@ class ParquetShardWriter:
         return self._shards_written
 
     def write_batch(self, batch: pa.RecordBatch) -> None:
-        if batch.num_rows == 0:
+        """Write a bounded RecordBatch, splitting it across shards if required."""
+        if batch.num_rows == 0 or self._is_closed:
             return
 
         offset = 0
         while offset < batch.num_rows:
             capacity = self.rows_per_shard - self._rows_in_current_shard
             take = min(capacity, batch.num_rows - offset)
-            self._write_chunk(batch.slice(offset, take))
-            offset += take
+            if take > 0:
+                self._write_chunk(batch.slice(offset, take))
+                offset += take
 
     def _write_chunk(self, record_batch: pa.RecordBatch) -> None:
         if record_batch.num_rows == 0:
             return
 
         if self._writer is None:
-            # Configure fast compression level for zstd
-            kwargs = {}
+            kwargs: dict[str, Any] = {}
             if self.compression.lower() == "zstd":
                 kwargs["compression_level"] = self.compression_level
 
+            shard_path = self._shard_path(self._shard_index)
             self._writer = pq.ParquetWriter(
-                self._shard_path(self._shard_index),
+                shard_path,
                 record_batch.schema,
                 compression=self.compression,
                 **kwargs,
@@ -379,16 +383,18 @@ class ParquetShardWriter:
         return self.output_dir / f"shard-{index:05d}.parquet"
 
     def _close_current_shard(self) -> None:
-        if self._writer is None:
-            return
-        self._writer.close()
-        self._writer = None
-        self._shards_written += 1
-        self._shard_index += 1
-        self._rows_in_current_shard = 0
+        if self._writer is not None:
+            self._writer.close()
+            self._writer = None
+            self._shards_written += 1
+            self._shard_index += 1
+            self._rows_in_current_shard = 0
 
     def close(self) -> None:
-        self._close_current_shard()
+        """Close the active shard and mark writer as finalized."""
+        if not self._is_closed:
+            self._close_current_shard()
+            self._is_closed = True
 
     def __enter__(self) -> "ParquetShardWriter":
         return self
@@ -431,7 +437,7 @@ def process_stream(
         ProcessPoolExecutor(
             max_workers=n_workers,
             mp_context=mp_context,
-            initializer=_init_worker_threads,
+            initializer=init_worker_threads,
         ) as pool,
     ):
         pending_futures: dict[Future, None] = {}

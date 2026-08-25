@@ -180,15 +180,27 @@ class GpuEnrichmentStats:
 
     @property
     def pure_gpu_tokens_per_sec(self) -> float:
-        return self.tokens_processed / self.gpu_forward_seconds if self.gpu_forward_seconds > 0 else 0.0
+        return (
+            self.tokens_processed / self.gpu_forward_seconds
+            if self.gpu_forward_seconds > 0
+            else 0.0
+        )
 
     @property
     def e2e_pipeline_tokens_per_sec(self) -> float:
-        return self.tokens_processed / self.inference_seconds if self.inference_seconds > 0 else 0.0
+        return (
+            self.tokens_processed / self.inference_seconds
+            if self.inference_seconds > 0
+            else 0.0
+        )
 
     @property
     def e2e_pipeline_samples_per_sec(self) -> float:
-        return self.rows_enriched / self.inference_seconds if self.inference_seconds > 0 else 0.0
+        return (
+            self.rows_enriched / self.inference_seconds
+            if self.inference_seconds > 0
+            else 0.0
+        )
 
 
 def merge_gpu_stats(results: list[GpuEnrichmentStats]) -> GpuEnrichmentStats:
@@ -238,7 +250,9 @@ def _validate_join_key(
 ) -> None:
     """Ensure every GPU-derived output preserves the immutable join key."""
     if GPU_JOIN_KEY not in batch.schema.names:
-        raise ValueError(f"{output_name} is missing required GPU join key {GPU_JOIN_KEY!r}")
+        raise ValueError(
+            f"{output_name} is missing required GPU join key {GPU_JOIN_KEY!r}"
+        )
 
 
 # ============================================================================
@@ -268,7 +282,9 @@ def _group_by_bucket(
     bucket lookup itself stays a row-wise, streaming operation.
     """
     token_lengths = record_batch.column("token_length").to_numpy(zero_copy_only=False)
-    bucket_indices = np.array([_bucket_for(int(n), buckets).bucket_max_tokens for n in token_lengths])
+    bucket_indices = np.array(
+        [_bucket_for(int(n), buckets).bucket_max_tokens for n in token_lengths]
+    )
 
     grouped: dict[int, pa.RecordBatch] = {}
     for bucket_max in sorted(set(bucket_indices)):
@@ -319,13 +335,19 @@ def _pad_batch(
 
     row_indices = np.repeat(np.arange(num_rows), clipped_lengths)
     col_indices = np.concatenate([np.arange(l) for l in clipped_lengths])
-    src_indices = np.concatenate([
-        np.arange(offsets[i], offsets[i] + clipped_lengths[i])
-        for i in range(num_rows)
-    ])
+    src_indices = np.concatenate(
+        [
+            np.arange(offsets[i], offsets[i] + clipped_lengths[i])
+            for i in range(num_rows)
+        ]
+    )
 
-    padded_ids[row_indices, col_indices] = torch.from_numpy(flat_ids[src_indices]).long()
-    padded_masks[row_indices, col_indices] = torch.from_numpy(flat_masks[src_indices]).to(torch.int8)
+    padded_ids[row_indices, col_indices] = torch.from_numpy(
+        flat_ids[src_indices]
+    ).long()
+    padded_masks[row_indices, col_indices] = torch.from_numpy(
+        flat_masks[src_indices]
+    ).to(torch.int8)
 
     return padded_ids, padded_masks
 
@@ -382,7 +404,7 @@ def _extract_likelihood_stats(
     """
     shift_logits = logits[:, :-1, :]
     shift_labels = input_ids[:, 1:]
-    shift_content_mask = (token_mask[:, 1:] > 0)
+    shift_content_mask = token_mask[:, 1:] > 0
 
     target_logits = torch.gather(
         shift_logits,
@@ -419,10 +441,14 @@ def _extract_likelihood_stats(
         "mean_log_prob": pa.array(mean_log_prob.cpu().numpy(), type=pa.float32()),
         "sum_log_prob": pa.array(sum_log_prob.cpu().numpy(), type=pa.float32()),
         "perplexity": pa.array(perplexity.cpu().numpy(), type=pa.float32()),
-        "supervised_position_count": pa.array(seq_lengths.cpu().numpy(), type=pa.int64()),
+        "supervised_position_count": pa.array(
+            seq_lengths.cpu().numpy(), type=pa.int64()
+        ),
         "min_token_logprob": pa.array(min_vals.cpu().numpy(), type=pa.float32()),
         "argmin_position": pa.array(argmin_pos.cpu().numpy(), type=pa.int64()),
-        "per_token_logprob_std": pa.array(per_token_logprob_std.cpu().numpy(), type=pa.float32()),
+        "per_token_logprob_std": pa.array(
+            per_token_logprob_std.cpu().numpy(), type=pa.float32()
+        ),
     }
 
 
@@ -488,7 +514,9 @@ def _run_bucket_batch_with_oom_retry(
 
             token_lengths = chunk.column("token_length").to_numpy(zero_copy_only=False)
             if (token_lengths > MAX_NATIVE_CONTEXT_TOKENS).any():
-                stats.rows_exceeding_native_context += int((token_lengths > MAX_NATIVE_CONTEXT_TOKENS).sum())
+                stats.rows_exceeding_native_context += int(
+                    (token_lengths > MAX_NATIVE_CONTEXT_TOKENS).sum()
+                )
                 quarantined_record_ids.extend(chunk.column("record_id").to_pylist())
                 offset += chunk.num_rows
                 succeeded = True
@@ -503,12 +531,16 @@ def _run_bucket_batch_with_oom_retry(
                 stats.gpu_forward_seconds += time.perf_counter() - gpu_start
 
                 stats.forward_passes += 1
-                stats.tokens_processed += int((token_mask != TOKEN_MASK_PADDING).sum().item())
+                stats.tokens_processed += int(
+                    (token_mask != TOKEN_MASK_PADDING).sum().item()
+                )
 
                 record_ids = chunk.column("record_id")
 
                 # 1. Embeddings Arrow Table
-                emb_array, norm_array = _extract_pooled_embeddings(last_hidden, token_mask)
+                emb_array, norm_array = _extract_pooled_embeddings(
+                    last_hidden, token_mask
+                )
                 emb_batch = pa.RecordBatch.from_arrays(
                     [record_ids, emb_array, norm_array],
                     names=list(EMBEDDING_COLUMNS),
@@ -551,7 +583,9 @@ def _run_bucket_batch_with_oom_retry(
                 continue
 
         if not succeeded:
-            quarantined_record_ids.append(record_batch.column("record_id")[offset].as_py())
+            quarantined_record_ids.append(
+                record_batch.column("record_id")[offset].as_py()
+            )
             offset += 1
 
     stats.rows_quarantined += len(quarantined_record_ids)
@@ -567,17 +601,23 @@ def _run_bucket_batch_with_oom_retry(
         else None
     )
     out_quarantine = (
-        pa.RecordBatch.from_arrays([pa.array(quarantined_record_ids)], names=[GPU_JOIN_KEY])
+        pa.RecordBatch.from_arrays(
+            [pa.array(quarantined_record_ids)], names=[GPU_JOIN_KEY]
+        )
         if quarantined_record_ids
         else None
     )
 
     if out_emb is not None:
-        _validate_output_columns(out_emb, EMBEDDING_COLUMNS, output_name="carbon_embeddings")
+        _validate_output_columns(
+            out_emb, EMBEDDING_COLUMNS, output_name="carbon_embeddings"
+        )
         _validate_join_key(out_emb, output_name="carbon_embeddings")
 
     if out_like is not None:
-        _validate_output_columns(out_like, LIKELIHOOD_COLUMNS, output_name="carbon_likelihood_stats")
+        _validate_output_columns(
+            out_like, LIKELIHOOD_COLUMNS, output_name="carbon_likelihood_stats"
+        )
         _validate_join_key(out_like, output_name="carbon_likelihood_stats")
 
     return out_emb, out_like, out_quarantine
@@ -616,14 +656,12 @@ def iter_tokenized_batches(
             shards_done_pct = (shard_idx / total_shards) * 100
             shards_per_sec = shard_idx / elapsed if elapsed > 0 else 0
             eta_seconds = (
-                (total_shards - shard_idx) / shards_per_sec
-                if shards_per_sec > 0
-                else 0
+                (total_shards - shard_idx) / shards_per_sec if shards_per_sec > 0 else 0
             )
 
             context.log.info(
                 f"[Shard Progress {shard_idx}/{total_shards} ({shards_done_pct:.1f}%)] "
-                f"Rows: {total_rows_read:,} | Elapsed: {elapsed/60:.1f}m | ETA: {eta_seconds/60:.1f}m"
+                f"Rows: {total_rows_read:,} | Elapsed: {elapsed / 60:.1f}m | ETA: {eta_seconds / 60:.1f}m"
             )
 
 
@@ -694,8 +732,10 @@ def process_gpu_enrichment(
                 bucket = next(b for b in buckets if b.bucket_max_tokens == bucket_max)
                 active_model = compiled_model if bucket.compile_enabled else raw_model
 
-                emb_batch, like_batch, quarantine_batch = _run_bucket_batch_with_oom_retry(
-                    active_model, tokenizer, bucket_batch, bucket, stats
+                emb_batch, like_batch, quarantine_batch = (
+                    _run_bucket_batch_with_oom_retry(
+                        active_model, tokenizer, bucket_batch, bucket, stats
+                    )
                 )
 
                 if emb_batch is not None and emb_batch.num_rows > 0:
