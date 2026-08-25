@@ -91,7 +91,7 @@ logger = logging.getLogger(__name__)
 _FALLBACK_BUCKET_CONFIG = [
     BucketBatchConfig(
         bucket_max_tokens=2048,
-        batch_size=8,
+        batch_size=32,
         dtype="bfloat16",
         attn_backend="kernels-community/flash-attn2",
         compile_enabled=True,

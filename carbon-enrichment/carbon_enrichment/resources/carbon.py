@@ -110,6 +110,7 @@ class CarbonModelResource(dg.ConfigurableResource):
     model_repo: str = DEFAULT_MODEL_REPO
     model_revision: str = DEFAULT_MODEL_REVISION
     attn_implementation: str = DEFAULT_ATTN_IMPLEMENTATION
+    
     device: str = "cuda"
 
     # ------------------------------------------------------------------------
