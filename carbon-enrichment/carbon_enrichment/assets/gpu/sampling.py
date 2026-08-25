@@ -58,7 +58,6 @@ GPU/tokenization cost). Sampling method, stratification variables, and
 seed are recorded in asset output metadata per #12/#22.5's provenance
 requirement.
 """
-
 import hashlib
 from collections import defaultdict
 from typing import Any, Literal
@@ -74,6 +73,7 @@ from carbon_enrichment.assets.cpu.streaming import (
 )
 from carbon_enrichment.config import CarbonPipelineConfig
 from carbon_enrichment.schema import VALIDATION_LEVEL_ROWS
+
 
 # ============================================================================
 # Constants
@@ -192,7 +192,7 @@ def sample_pilot_corpus(
 
         dev            -> 1,000
         dev_gpu_small  -> 3,000
-        dev_gpu_medium -> 30,000
+        dev_gpu_medium  -> 30,000
         integration    -> 1,000,000
         auth           -> 32,410,000
 
@@ -216,13 +216,17 @@ def sample_pilot_corpus(
         )
 
     if max_rows is not None and max_rows < 0:
-        raise ValueError(f"max_rows must be non-negative or None, got {max_rows!r}")
+        raise ValueError(
+            f"max_rows must be non-negative or None, got {max_rows!r}"
+        )
 
     if batch_size <= 0:
         raise ValueError(f"batch_size must be positive, got {batch_size!r}")
 
     if rows_per_shard <= 0:
-        raise ValueError(f"rows_per_shard must be positive, got {rows_per_shard!r}")
+        raise ValueError(
+            f"rows_per_shard must be positive, got {rows_per_shard!r}"
+        )
 
     if input_type == "hub":
         row_iter = _read_hub_dataset(
@@ -339,7 +343,9 @@ def sample_pilot_corpus(
             if max_rows is not None and rows_read >= max_rows:
                 break
 
-        shards_written = writer.shards_written
+    # IMPORTANT: the ParquetShardWriter context has now closed the final
+    # partial shard, so shards_written is now the final authoritative count.
+    shards_written = writer.shards_written
 
     drift_report = _representativeness_drift(
         bounded_corpus_counts,
@@ -349,7 +355,9 @@ def sample_pilot_corpus(
     return {
         "rows_read": rows_read,
         "rows_sampled": rows_sampled,
-        "actual_fraction": (rows_sampled / rows_read if rows_read else 0.0),
+        "actual_fraction": (
+            rows_sampled / rows_read if rows_read else 0.0
+        ),
         "target_fraction": fraction,
         "seed": seed,
         "max_rows": max_rows,
@@ -452,7 +460,8 @@ def carbon_pilot_corpus(
     if config.cpu_enriched_input_type == "hub":
         if not config.cpu_enriched_dataset:
             raise ValueError(
-                "cpu_enriched_dataset is required when cpu_enriched_input_type='hub'"
+                "cpu_enriched_dataset is required when "
+                "cpu_enriched_input_type='hub'"
             )
 
         input_source = config.cpu_enriched_dataset
@@ -519,7 +528,9 @@ def carbon_pilot_corpus(
                 else None
             ),
             "input_dir": (
-                config.output_dir if config.cpu_enriched_input_type == "local" else None
+                config.output_dir
+                if config.cpu_enriched_input_type == "local"
+                else None
             ),
             "validation_level": config.validation_level,
             "max_rows": max_rows,
@@ -531,7 +542,9 @@ def carbon_pilot_corpus(
             ),
             "target_fraction": result["target_fraction"],
             "sampling_seed": result["seed"],
-            "sampling_method": ("deterministic_per_row_hash_stratified"),
+            "sampling_method": (
+                "deterministic_per_row_hash_stratified"
+            ),
             "stratification_variables": [
                 "sequence_length_bucket_proxy",
                 "is_coding_region",
@@ -541,6 +554,8 @@ def carbon_pilot_corpus(
             "stratum_count": result["stratum_count"],
             "parquet_shards": result["shards_written"],
             "drifted_strata_count": len(result["drift_report"]),
-            "drift_report": dg.MetadataValue.json(result["drift_report"]),
+            "drift_report": dg.MetadataValue.json(
+                result["drift_report"]
+            ),
         }
     )

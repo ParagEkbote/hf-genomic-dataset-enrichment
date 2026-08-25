@@ -71,7 +71,6 @@ Per-worker ValidationStats instances are merged in the main process via
 `merge_validation_stats()`, since dataclass mutation does not cross
 process boundaries.
 """
-
 import multiprocessing
 import os
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -97,10 +96,11 @@ from carbon_enrichment.assets.cpu.validation import (
 )
 from carbon_enrichment.config import CarbonPipelineConfig
 
+
 # ============================================================================
 # Batch type
 # ============================================================================
-#
+
 # pa.RecordBatch is the canonical in-flight batch type for this module.
 # Column-length consistency is an Arrow RecordBatch invariant (every column
 # in a RecordBatch has exactly `num_rows` entries by construction), so the
@@ -113,6 +113,11 @@ BatchTransform = Callable[
     [Batch],
     Batch,
 ]
+
+
+# ============================================================================
+# Input readers
+# ============================================================================
 
 
 def _read_local_parquet(
@@ -163,9 +168,13 @@ def _read_hub_dataset(
     chunk here; row-by-row iteration is left to the caller's own batching
     (e.g. `iter_batches`), same as the local reader's per-row yield.
 
-    Pin `revision` to a commit SHA for reproducible sampling runs -- the
-    Hub repository at `dataset_id` is mutable, and an unpinned revision
-    means "whatever main currently contains" rather than a fixed input.
+    Pin `revision` to a commit SHA for reproducible sampling runs -- the Hub
+    repository at `dataset_id` is mutable, and an unpinned revision means
+    "whatever main currently contains" rather than a fixed input.
+
+    The upstream Hub stream is explicitly closed when iteration terminates,
+    including when a downstream consumer stops early because it has reached
+    its configured row limit.
     """
 
     hub_stream = load_dataset(
@@ -175,7 +184,13 @@ def _read_hub_dataset(
         revision=revision,
     )
 
-    yield from hub_stream
+    try:
+        yield from hub_stream
+    finally:
+        close = getattr(hub_stream, "close", None)
+
+        if callable(close):
+            close()
 
 
 # ============================================================================
@@ -213,6 +228,10 @@ def iter_batches(
     At most `batch_size` rows are retained by this batching layer. Rows are
     buffered only long enough to build one RecordBatch, then discarded --
     the bounded-memory contract is unchanged from the dict-based version.
+
+    If iteration terminates early, explicitly close the upstream iterator
+    when it exposes a close() method so resources owned by nested generators
+    are released promptly.
     """
 
     if batch_size <= 0:
@@ -220,16 +239,23 @@ def iter_batches(
 
     rows: list[Mapping[str, Any]] = []
 
-    for row in stream:
-        rows.append(row)
+    try:
+        for row in stream:
+            rows.append(row)
 
-        if len(rows) >= batch_size:
+            if len(rows) >= batch_size:
+                yield _rows_to_record_batch(rows)
+
+                rows = []
+
+        if rows:
             yield _rows_to_record_batch(rows)
 
-            rows = []
+    finally:
+        close = getattr(stream, "close", None)
 
-    if rows:
-        yield _rows_to_record_batch(rows)
+        if callable(close):
+            close()
 
 
 def _rows_to_record_batch(
@@ -329,7 +355,6 @@ class ParquetShardWriter:
         rows_per_shard: int,
         compression: str,
     ) -> None:
-
         if rows_per_shard <= 0:
             raise ValueError("rows_per_shard must be greater than zero")
 
@@ -394,7 +419,6 @@ class ParquetShardWriter:
         self,
         record_batch: pa.RecordBatch,
     ) -> None:
-
         if record_batch.num_rows == 0:
             return
 
@@ -418,11 +442,9 @@ class ParquetShardWriter:
         self,
         index: int,
     ) -> Path:
-
         return self.output_dir / f"shard-{index:05d}.parquet"
 
     def _close_current_shard(self) -> None:
-
         if self._writer is None:
             return
 
@@ -444,7 +466,6 @@ class ParquetShardWriter:
     def __enter__(
         self,
     ) -> "ParquetShardWriter":
-
         return self
 
     def __exit__(
@@ -453,7 +474,6 @@ class ParquetShardWriter:
         exc_value: Any,
         traceback: Any,
     ) -> None:
-
         self.close()
 
 
@@ -481,13 +501,13 @@ def process_stream(
     Per-batch work order (executed inside worker processes):
 
         raw (RecordBatch)
-         ↓
+        ↓
         normalization
-         ↓
+        ↓
         validation
-         ↓
+        ↓
         enrichment
-         ↓
+        ↓
         RecordBatch
 
     The main process handles only: schema check (first batch), streaming
@@ -509,14 +529,14 @@ def process_stream(
     inflight_limit = n_workers * 4
 
     # Use "fork" explicitly rather than relying on the platform default.
-    # Dagster's multiprocess executor already runs this asset inside its
-    # own subprocess (STEP_WORKER). Nesting a "spawn"-based pool inside
-    # that subprocess forces each worker to reimport the Python process
-    # from scratch, which can fail to resolve locally/editable-installed
-    # packages such as carbon_enrichment. "fork" instead inherits the
-    # parent's already-loaded modules and sys.path, avoiding the reimport
-    # entirely. This requires Linux/macOS; fork is not available on
-    # Windows, where spawn is the only option.
+    # Dagster's multiprocess executor already runs this asset inside
+    # its own subprocess (STEP_WORKER). Nesting a "spawn"-based pool
+    # inside that subprocess forces each worker to reimport the Python
+    # process from scratch, which can fail to resolve locally/editable-
+    # installed packages such as carbon_enrichment. "fork" instead
+    # inherits the parent's already-loaded modules and sys.path,
+    # avoiding the reimport entirely. This requires Linux/macOS;
+    # fork is not available on Windows, where spawn is the only option.
     mp_context = multiprocessing.get_context("fork")
 
     with (
@@ -535,7 +555,6 @@ def process_stream(
         def _drain(
             futures: list[Future],
         ) -> None:
-
             for future in futures:
                 enriched, local_stats, _raw_rows = future.result()
 
@@ -598,7 +617,9 @@ def process_stream(
         # Flush any remaining in-flight batches.
         _drain(pending)
 
-        stats.shards_written = writer.shards_written
+    # The writer context has now closed the final partial shard, so its
+    # shard count is complete and safe to copy into the returned statistics.
+    stats.shards_written = writer.shards_written
 
     validation_stats = merge_validation_stats(validation_results)
 
@@ -653,7 +674,9 @@ def carbon_cpu_enriched_sequences(
 
     cpu_workers = getattr(config, "cpu_workers", None)
 
-    context.log.info(f"cpu_workers={cpu_workers!r} (None => os.cpu_count() - 1)")
+    context.log.info(
+        f"cpu_workers={cpu_workers!r} (None => os.cpu_count() - 1)"
+    )
 
     # ------------------------------------------------------------------------
     # Create lazy Hugging Face stream.
