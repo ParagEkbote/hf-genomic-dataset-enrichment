@@ -89,7 +89,6 @@ carbon_cpu_job = dg.define_asset_job(
 carbon_tokenize_job = dg.define_asset_job(
     name="carbon_tokenize_job",
     selection=dg.AssetSelection.keys(
-        "carbon_pilot_corpus",
         "carbon_tokenized_corpus",
     ),
     executor_def=dg.in_process_executor,

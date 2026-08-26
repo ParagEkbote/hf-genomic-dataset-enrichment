@@ -114,7 +114,7 @@ BatchTransform = Callable[[Batch], Batch]
 def init_worker_threads() -> None:
     """Clamp internal C/C++ threadpools inside each forked worker process."""
     pa.set_cpu_count(1)
-    pa.set_io_cpu_count(1)
+    pa.set_io_thread_count(1)
 
 
 # ============================================================================
