@@ -16,6 +16,11 @@ dagster job execute \
   -m carbon_enrichment.definitions \
   -j carbon_gpu_job \
   -c config/dev-gpu.yaml
+
+dagster job execute \
+  -m carbon_enrichment.definitions \
+  -j carbon_tokenize_job \
+  -c config/dev-gpu.yaml
 ```
 
 | Question type                        | Faceberg | DuckDB | Qdrant | Elasticsearch | LlamaIndex |
