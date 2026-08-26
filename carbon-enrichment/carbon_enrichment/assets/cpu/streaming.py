@@ -122,7 +122,7 @@ def init_worker_threads() -> None:
 # ============================================================================
 
 
-def _read_local_parquet_batches(
+def _read_local_parquet(
     input_dir: str | Path,
     *,
     batch_size: int,
