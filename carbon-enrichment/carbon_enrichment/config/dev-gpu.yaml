@@ -1,7 +1,9 @@
 ops:
   carbon_pilot_corpus:
     config:
-      validation_level: "integration"
+      validation_level: "auth"
+      pilot_sample_fraction: 0.10 
+      pilot_sample_seed: 42
       cpu_enriched_input_type: "hub"
       cpu_enriched_dataset: "AINovice2005/carbon-cpu-enriched-sequences"
       pilot_output_dir: ".dagster_hf_storage/carbon_pilot_corpus"
@@ -22,6 +24,6 @@ ops:
   carbon_gpu_enrichment:
     config:
       tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
-      batch_size: 4096
+      batch_size: 2048
       rows_per_shard: 10000
       compression: "zstd"
