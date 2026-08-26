@@ -1,0 +1,9 @@
+ops:
+  carbon_tokenized_corpus:
+    config:
+      pilot_output_dir: ".dagster_hf_storage/carbon_pilot_corpus_dedup"
+      tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
+      batch_size: 2048
+      rows_per_shard: 10000
+      compression: "zstd"
+      cpu_workers: 4
