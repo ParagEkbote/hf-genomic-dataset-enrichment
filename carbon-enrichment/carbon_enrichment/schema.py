@@ -31,6 +31,7 @@ embedding model-specific computation or feature semantics.
 
 from typing import Final
 
+
 # ============================================================================
 # 1. Hugging Face dataset
 # ============================================================================
@@ -43,36 +44,13 @@ HF_DATASET_SPLIT: Final[str] = "train"
 
 
 # ============================================================================
-# 2. Validation tiers
-# ============================================================================
-#
-# These define the development workflow.
-#
-# dev:
-#     Fast development feedback.
-#
-# integration:
-#     Larger integration-scale execution.
-#
-# auth:
-#     Pre-release / authentication-scale execution.
-#
-# Streaming does not support split-slicing syntax (e.g. "train[:100]") —
-# IterableDataset has no length to slice against, so the builder rejects
-# it as an invalid split name. Split selection and stream truncation are
-# therefore represented as two separate concerns:
-#
-#     STREAMING_SPLIT       -> which named HF split to open ("train")
-#     VALIDATION_LEVEL_ROWS -> how many examples to .take() from it
-#
-# This also makes each tier reproducible: it's tied to an explicit row
-# count rather than a split-expression that depends on dataset length.
+# 2. Validation / dataset configuration
 # ============================================================================
 
 STREAMING_SPLIT: Final[str] = "train"
 
 VALIDATION_LEVEL_ROWS: Final[dict[str, int]] = {
-    "dev": 1000,
+    "dev": 1_000,
     "integration": 3_241_000,
     "auth": 32_410_000,
 }
@@ -92,11 +70,14 @@ VALIDATION_LEVELS: Final[tuple[str, ...]] = (
 # 3. Expected raw dataset schema
 # ============================================================================
 #
-# The Carbon eukaryote_generator configuration exposes these 14 raw columns.
+# The Carbon eukaryote_generator configuration exposes these raw columns.
 #
 # These definitions describe the RAW dataset only.
 #
 # No derived feature is added here.
+#
+# The deduplicated corpus retains this same biological/source schema.
+# Deduplication is enforced using BIOLOGICAL_KEY_COLUMNS below.
 # ============================================================================
 
 EXPECTED_COLUMNS: Final[dict[str, str]] = {
@@ -125,7 +106,11 @@ EXPECTED_COLUMN_COUNT: Final[int] = len(EXPECTED_COLUMNS)
 # 4. Required fields
 # ============================================================================
 #
-# These fields are required for downstream CPU enrichment.
+# These fields are required for downstream CPU enrichment, tokenization,
+# and GPU enrichment.
+#
+# record_id/start/end together form the canonical biological identity.
+# sequence is the model/tokenization input.
 # ============================================================================
 
 REQUIRED_FIELDS: Final[tuple[str, ...]] = (
@@ -139,7 +124,44 @@ REQUIRED_FIELDS: Final[tuple[str, ...]] = (
 
 
 # ============================================================================
-# 5. Valid categorical/token vocabularies
+# 5. Row / biological identity
+# ============================================================================
+#
+# `record_id` is an accession/reference identifier. It is NOT unique at the
+# sequence-row level. A single record_id may correspond to many sequence rows.
+#
+# The biological identity of a sequence interval is represented by:
+#
+#     (record_id, start, end)
+#
+# This three-column tuple is the canonical composite key for the pipeline.
+#
+# The raw source may contain repeated occurrences of this tuple.
+#
+# The deduplicated corpus MUST contain exactly one row for each tuple.
+#
+# Because the deduplicated corpus guarantees uniqueness of this tuple, the
+# same composite key can be used directly as the GPU join key. No additional
+# serialized or surrogate row_key is required.
+# ============================================================================
+
+BIOLOGICAL_KEY_COLUMNS: Final[tuple[str, str, str]] = (
+    "record_id",
+    "start",
+    "end",
+)
+
+BIOLOGICAL_KEY_UNIQUE_AFTER_DEDUP: Final[bool] = True
+
+# GPU-derived assets join directly on the biological composite key.
+#
+# This is intentionally a tuple of source columns rather than a materialized
+# `row_key` column.
+GPU_JOIN_KEY: Final[tuple[str, str, str]] = BIOLOGICAL_KEY_COLUMNS
+
+
+# ============================================================================
+# 6. Valid categorical/token vocabularies
 # ============================================================================
 #
 # These are contracts for categorical fields whose representations are
@@ -147,7 +169,7 @@ REQUIRED_FIELDS: Final[tuple[str, ...]] = (
 #
 # gene_type is intentionally NOT included here yet. The dataset exposes
 # multiple gene_type classes, but this module should not invent a complete
-# six-value vocabulary from a partial sample.
+# vocabulary from a partial sample.
 #
 # Validation of gene_type therefore focuses on field presence/type and
 # non-nullness where appropriate until the complete vocabulary has been
@@ -195,16 +217,7 @@ VALID_SEQUENCE_TOKENS: Final[dict[str, frozenset[str]]] = {
 
 
 # ============================================================================
-# 6. Gene-boundary token pairing
-# ============================================================================
-#
-# The corpus contains two recognized boundary-token families:
-#
-#     <bog> -> <eog>
-#     <bok> -> <eok>
-#
-# Validation should reject/report unexpected combinations rather than
-# assuming that every gene uses the same boundary family.
+# 7. Gene-boundary token pairing
 # ============================================================================
 
 GENE_BOUNDARY_PAIRS: Final[tuple[tuple[str, str], ...]] = (
@@ -214,48 +227,18 @@ GENE_BOUNDARY_PAIRS: Final[tuple[tuple[str, str], ...]] = (
 
 
 # ============================================================================
-# 7. Nucleotide alphabet
-# ============================================================================
-#
-# Standard bases:
-#     A C G T
-#
-# IUPAC ambiguity codes:
-#     N R Y S W K M B D H V
-#
-# Gap:
-#     -
-#
-# Accepted ambiguity codes remain valid sequence characters. They are
-# tracked separately by enrichment/QC rather than being discarded.
+# 8. Nucleotide alphabet
 # ============================================================================
 
-IUPAC_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset("ACGTNRYSWKMBDHV-")
+IUPAC_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset(
+    "ACGTNRYSWKMBDHV-"
+)
 
 CLEAN_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset("ACGT")
 
 
 # ============================================================================
-# 8. Taxonomy expectations
-# ============================================================================
-#
-# Taxonomy is variable-depth biological information.
-#
-# IMPORTANT:
-#     Do NOT define MAX_TAXONOMY_RANKS.
-#
-# The complete taxonomy string must remain intact. Enrichment may derive:
-#
-#     taxonomy_domain
-#     taxonomy_depth
-#
-# without truncating the original taxonomy.
-#
-# Example:
-#
-#     Eukaryota;Fungi;Dikarya;...;Agaricaceae;Agaricus
-#
-# remains completely intact in `taxonomy`.
+# 9. Taxonomy expectations
 # ============================================================================
 
 KNOWN_TAXONOMY_ROOTS: Final[frozenset[str]] = frozenset(
@@ -271,7 +254,7 @@ MIN_TAXONOMY_LEVELS: Final[int] = 2
 
 
 # ============================================================================
-# 9. Coordinate expectations
+# 10. Coordinate expectations
 # ============================================================================
 
 COORDINATE_COLUMNS: Final[tuple[str, str]] = (
@@ -283,34 +266,22 @@ MIN_COORDINATE_VALUE: Final[int] = 0
 
 
 # ============================================================================
-# 10. GPU enrichment output contracts
+# 11. GPU enrichment output contracts
 # ============================================================================
 #
-# These define the schemas of materialized GPU/model-derived assets.
+# Every GPU-derived asset preserves the canonical biological composite key:
 #
-# They are intentionally separate from EXPECTED_COLUMNS because
-# EXPECTED_COLUMNS describes the lossless RAW Carbon dataset contract.
+#     (record_id, start, end)
 #
-# GPU stages:
+# GPU assets must never depend on row position for alignment.
 #
-#     tokenized_corpus
-#         -> token_ids / token_mask / token_length
-#
-#     embeddings
-#         -> embedding vectors
-#
-#     likelihood_stats
-#         -> model likelihood metrics
-#
-# All GPU-derived assets retain record_id so they can be joined back to
-# the CPU-enriched corpus without relying on row position.
-#
-# These tuples define column identity. Precise Arrow/nested types should
-# remain with the implementation until the representation is finalized.
+# The tokenized corpus additionally contains the model input representation.
 # ============================================================================
 
 TOKENIZED_CORPUS_COLUMNS: Final[tuple[str, ...]] = (
     "record_id",
+    "start",
+    "end",
     "token_ids",
     "token_mask",
     "token_length",
@@ -318,12 +289,16 @@ TOKENIZED_CORPUS_COLUMNS: Final[tuple[str, ...]] = (
 
 EMBEDDING_COLUMNS: Final[tuple[str, ...]] = (
     "record_id",
+    "start",
+    "end",
     "embedding",
     "embedding_norm",
 )
 
 LIKELIHOOD_COLUMNS: Final[tuple[str, ...]] = (
     "record_id",
+    "start",
+    "end",
     "mean_log_prob",
     "sum_log_prob",
     "perplexity",
@@ -335,29 +310,28 @@ LIKELIHOOD_COLUMNS: Final[tuple[str, ...]] = (
 
 
 # ============================================================================
-# 11. GPU asset join key
+# 12. GPU asset join key
 # ============================================================================
 #
-# Every GPU-derived asset must preserve record_id.
+# Every GPU-derived asset joins using the same three biological columns:
 #
-# This provides the stable join key between:
+#     record_id
+#     start
+#     end
 #
-#     CPU-enriched corpus
-#             |
-#             +---- tokenized corpus
-#             |
-#             +---- embeddings
-#             |
-#             +---- likelihood statistics
+# The deduplicated corpus guarantees that this composite key is unique.
 #
-# GPU assets must not depend on row position for alignment.
+# No row_key/surrogate identity column is materialized.
+#
+# Downstream GPU assets must preserve these columns directly.
 # ============================================================================
 
-GPU_JOIN_KEY: Final[str] = "record_id"
+# GPU_JOIN_KEY is declared above alongside BIOLOGICAL_KEY_COLUMNS so that
+# all identity-related contracts have a single source of truth.
 
 
 # ============================================================================
-# 12. GPU token-mask semantics
+# 13. GPU token-mask semantics
 # ============================================================================
 #
 # token_mask is NOT a conventional binary attention mask.
@@ -365,7 +339,7 @@ GPU_JOIN_KEY: Final[str] = "record_id"
 #     -2       padding
 #     -1       BPE/text token
 #      0       DNA special token
-#      1..k    partial/full k-mer contribution length
+#      1..k    partial/full k-mer contribution
 #
 # These values are part of the GPU pipeline's data contract and therefore
 # must not be hardcoded independently in downstream stages.
