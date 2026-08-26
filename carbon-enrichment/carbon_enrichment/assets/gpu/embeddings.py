@@ -1,62 +1,12 @@
-"""
-M4/M5 — Single-pass GPU enrichment: embeddings + likelihood stats.
-
-Design doc #14: Carbon-3B is a stock LlamaForCausalLM. One forward pass
-yields both `logits` (-> M4 likelihood stats via memory-safe logsumexp)
-and `last_hidden_state` (-> M5 embedding pooling). This module owns that
-single forward pass and emits BOTH outputs as one Dagster multi_asset --
-`likelihood.py` does NOT run its own forward pass; it consumes
-`carbon_likelihood_stats` from here. Running the model twice (once per file)
-would silently violate #14 and double GPU cost for no benefit, since both
-outputs come from the same call.
-
-Pipeline:
-
-    carbon_tokenized_corpus (token_ids, record_id, token_length)
-                │
-                ▼
-          bucket by token_length (#1)
-                │
-                ▼
-    ┌── model(ids, output_hidden_states=False) ──┐
-    │        │                                    │
-    │     logits                          last_hidden_state
-    │        │                                    │
-    │   likelihood stats                  pooled embeddings
-    │   (extract, discard                 (extract, keep)
-    │    logits immediately)                      │
-    └─────────────────────────────────────────────┘
-                │                                 │
-                ▼                                 ▼
-    carbon_likelihood_stats               carbon_embeddings
-    (sharded Parquet)                     (sharded Parquet)
-
-Principles applied here (see design doc for full rationale):
-- #1  bucket by token length, not raw bp length
-- #2  GPU batching (bucket-internal) separate from Dagster partitioning
-- #3  never retain logits beyond the batch -- extract stats, discard
-- #4  model.eval() + torch.inference_mode() (eval() lives in
-      resources/carbon.py; inference_mode is applied here per forward call)
-- #6  sharded Parquet output, not one monolithic file
-- #7  checkpoint/manifest at the shard level
-- #8  record_id is the immutable join key -- asserted in/out
-- #9  (downstream, M5.5) cluster on raw embeddings, never UMAP coords --
-      not this module's concern, just don't violate it by e.g. reducing
-      dimensionality here
-- #12 provenance metadata per shard
-- #13 keep corpus-wide ops (NN, clustering) out of this row-wise loop
-- #16 long-sequence exception path is a defensive assertion, not a branch
-- #19 torch.compile requires bucket-stable static shapes
-- #23 OOM retry cascade feeds back into the static config as a signal
-"""
-
+import gc
+import json
 import logging
 import os
+from pathlib import Path
 import time
+from typing import Any
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
 
 # Safeguard against VRAM virtual address fragmentation during high-occupancy (>70GB) runs
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -64,6 +14,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import dagster as dg
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import torch
 
@@ -82,6 +33,14 @@ from carbon_enrichment.schema import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Run-budget configuration
+# ============================================================================
+
+DEFAULT_GPU_TOKEN_BUDGET = 500_000_000
+GPU_CHECKPOINT_FILENAME = "gpu_enrichment_checkpoint.json"
 
 
 # ============================================================================
@@ -249,14 +208,19 @@ def _validate_join_key(
     output_name: str,
 ) -> None:
     """Ensure every GPU-derived output preserves the immutable join key."""
-    if GPU_JOIN_KEY not in batch.schema.names:
+    missing = [
+        column
+        for column in GPU_JOIN_KEY
+        if column not in batch.schema.names
+    ]
+    if missing:
         raise ValueError(
-            f"{output_name} is missing required GPU join key {GPU_JOIN_KEY!r}"
+            f"{output_name} is missing required GPU join columns: {missing!r}"
         )
 
 
 # ============================================================================
-# Bucketing (design doc #1)
+# Bucketing
 # ============================================================================
 
 
@@ -275,12 +239,7 @@ def _group_by_bucket(
     record_batch: pa.RecordBatch,
     buckets: list[BucketBatchConfig],
 ) -> dict[int, pa.RecordBatch]:
-    """Split one input RecordBatch into per-bucket RecordBatches.
-
-    Grouping happens per-input-batch (bounded memory), not corpus-wide --
-    #2's separation of GPU batching from Dagster partitioning means the
-    bucket lookup itself stays a row-wise, streaming operation.
-    """
+    """Split one input RecordBatch into per-bucket RecordBatches."""
     token_lengths = record_batch.column("token_length").to_numpy(zero_copy_only=False)
     bucket_indices = np.array(
         [_bucket_for(int(n), buckets).bucket_max_tokens for n in token_lengths]
@@ -343,17 +302,17 @@ def _pad_batch(
     )
 
     padded_ids[row_indices, col_indices] = torch.from_numpy(
-        flat_ids[src_indices]
-    ).long()
+        flat_ids[src_indices].astype(np.int64, copy=False)
+    )
     padded_masks[row_indices, col_indices] = torch.from_numpy(
-        flat_masks[src_indices]
-    ).to(torch.int8)
+        flat_masks[src_indices].astype(np.int8, copy=False)
+    )
 
     return padded_ids, padded_masks
 
 
 # ============================================================================
-# Single forward pass — the core of #14
+# Single forward pass
 # ============================================================================
 
 
@@ -363,10 +322,7 @@ def _run_forward_pass(
     chunk: pa.RecordBatch,
     bucket: BucketBatchConfig,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """One model(ids, output_hidden_states=False) call for one GPU-batch.
-
-    Returns (logits, last_hidden_state, input_ids, token_mask) as torch tensors.
-    """
+    """One model(ids, output_hidden_states=False) call for one GPU-batch."""
     input_ids, token_mask = _pad_batch(
         chunk.column("token_ids"),
         chunk.column("token_mask"),
@@ -377,14 +333,13 @@ def _run_forward_pass(
     input_ids = input_ids.to(model.device, non_blocking=True)
     token_mask = token_mask.to(model.device, non_blocking=True)
 
-    # attention_mask for the model call itself is just "not padding"
     attention_mask = (token_mask != TOKEN_MASK_PADDING).to(torch.long)
 
     with torch.inference_mode():
         outputs = model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            output_hidden_states=False,  # Saves ~30x activation memory vs storing all layers
+            output_hidden_states=False,
         )
 
     return outputs.logits, outputs.last_hidden_state, input_ids, token_mask
@@ -396,12 +351,7 @@ def _extract_likelihood_stats(
     token_mask: torch.Tensor,
     use_fp32_reduction: bool = False,
 ) -> dict[str, pa.Array]:
-    """Per-sequence likelihood summary stats from logits, extracted immediately.
-
-    Uses torch.logsumexp reduction to bypass 100GB+ log_softmax allocations.
-    Masking follows the FNS token_mask convention: positions are included
-    only where token_mask > 0 (valid k-mer content -- 1..k).
-    """
+    """Per-sequence likelihood summary stats from logits."""
     shift_logits = logits[:, :-1, :]
     shift_labels = input_ids[:, 1:]
     shift_content_mask = token_mask[:, 1:] > 0
@@ -456,16 +406,10 @@ def _extract_pooled_embeddings(
     last_hidden_state: torch.Tensor,
     token_mask: torch.Tensor,
 ) -> tuple[pa.Array, pa.Array]:
-    """Mean-pool the last hidden-state layer over real (non-pad) tokens.
-
-    Deliberately includes every non-padding position (token_mask != -2) --
-    the <dna>/</dna> boundary special tokens (mask == 0) ARE included
-    here, since they carry structural signal.
-    """
+    """Mean-pool the last hidden-state layer over real (non-pad) tokens."""
     mask = (token_mask != TOKEN_MASK_PADDING).unsqueeze(-1).to(last_hidden_state.dtype)
     counts = mask.sum(dim=1).clamp(min=1.0)
 
-    # Batched matrix-vector contraction: avoids (B, L, H) intermediate broadcast allocation
     pooled = torch.bmm(last_hidden_state.transpose(1, 2), mask).squeeze(-1) / counts
     norms = torch.linalg.vector_norm(pooled, dim=-1)
 
@@ -482,7 +426,7 @@ def _extract_pooled_embeddings(
 
 
 # ============================================================================
-# OOM retry cascade (#23)
+# OOM retry cascade
 # ============================================================================
 
 
@@ -501,6 +445,8 @@ def _run_bucket_batch_with_oom_retry(
     emb_batches: list[pa.RecordBatch] = []
     like_batches: list[pa.RecordBatch] = []
     quarantined_record_ids: list[Any] = []
+    quarantined_starts: list[Any] = []
+    quarantined_ends: list[Any] = []
 
     fractions = [1, 2, 4, n]
 
@@ -518,6 +464,8 @@ def _run_bucket_batch_with_oom_retry(
                     (token_lengths > MAX_NATIVE_CONTEXT_TOKENS).sum()
                 )
                 quarantined_record_ids.extend(chunk.column("record_id").to_pylist())
+                quarantined_starts.extend(chunk.column("start").to_pylist())
+                quarantined_ends.extend(chunk.column("end").to_pylist())
                 offset += chunk.num_rows
                 succeeded = True
                 break
@@ -536,24 +484,28 @@ def _run_bucket_batch_with_oom_retry(
                 )
 
                 record_ids = chunk.column("record_id")
+                starts = chunk.column("start")
+                ends = chunk.column("end")
 
-                # 1. Embeddings Arrow Table
+                # 1. Embeddings Record Batch
                 emb_array, norm_array = _extract_pooled_embeddings(
                     last_hidden, token_mask
                 )
                 emb_batch = pa.RecordBatch.from_arrays(
-                    [record_ids, emb_array, norm_array],
+                    [record_ids, starts, ends, emb_array, norm_array],
                     names=list(EMBEDDING_COLUMNS),
                 )
                 emb_batches.append(emb_batch)
 
-                # 2. Likelihood Arrow Table
+                # 2. Likelihood Record Batch
                 like_arrays = _extract_likelihood_stats(
                     logits, input_ids, token_mask, use_fp32_reduction=use_fp32_reduction
                 )
                 like_batch = pa.RecordBatch.from_arrays(
                     [
                         record_ids,
+                        starts,
+                        ends,
                         like_arrays["mean_log_prob"],
                         like_arrays["sum_log_prob"],
                         like_arrays["perplexity"],
@@ -586,23 +538,34 @@ def _run_bucket_batch_with_oom_retry(
             quarantined_record_ids.append(
                 record_batch.column("record_id")[offset].as_py()
             )
+            quarantined_starts.append(
+                record_batch.column("start")[offset].as_py()
+            )
+            quarantined_ends.append(
+                record_batch.column("end")[offset].as_py()
+            )
             offset += 1
 
     stats.rows_quarantined += len(quarantined_record_ids)
 
     out_emb = (
-        pa.concat_tables([pa.Table.from_batches(emb_batches)]).to_batches()[0]
+        pa.Table.from_batches(emb_batches).combine_chunks().to_batches()[0]
         if emb_batches
         else None
     )
     out_like = (
-        pa.concat_tables([pa.Table.from_batches(like_batches)]).to_batches()[0]
+        pa.Table.from_batches(like_batches).combine_chunks().to_batches()[0]
         if like_batches
         else None
     )
     out_quarantine = (
         pa.RecordBatch.from_arrays(
-            [pa.array(quarantined_record_ids)], names=[GPU_JOIN_KEY]
+            [
+                pa.array(quarantined_record_ids),
+                pa.array(quarantined_starts),
+                pa.array(quarantined_ends),
+            ],
+            names=list(GPU_JOIN_KEY),
         )
         if quarantined_record_ids
         else None
@@ -624,45 +587,171 @@ def _run_bucket_batch_with_oom_retry(
 
 
 # ============================================================================
-# Batch reading — Arrow-native, tokenized shards with live progress
+# Resumable output/checkpoint helpers
 # ============================================================================
 
 
-def iter_tokenized_batches(
+def _checkpoint_path(input_dir: str | Path) -> Path:
+    return Path(input_dir) / GPU_CHECKPOINT_FILENAME
+
+
+def _load_checkpoint(input_dir: str | Path) -> dict[str, Any]:
+    path = _checkpoint_path(input_dir)
+    if not path.exists():
+        return {"version": 1, "completed_shards": {}}
+
+    with path.open("r", encoding="utf-8") as handle:
+        checkpoint = json.load(handle)
+
+    if checkpoint.get("version") != 1:
+        raise ValueError(
+            f"Unsupported GPU enrichment checkpoint version: "
+            f"{checkpoint.get('version')!r}"
+        )
+
+    completed = checkpoint.get("completed_shards", {})
+    if not isinstance(completed, dict):
+        raise ValueError("GPU enrichment checkpoint has invalid completed_shards")
+
+    return checkpoint
+
+
+def _save_checkpoint(
     input_dir: str | Path,
-    batch_size: int,
-    context: dg.AssetExecutionContext | None = None,
-) -> Iterator[pa.RecordBatch]:
-    """Stream RecordBatches directly from tokenize_and_tag's output shards."""
-    input_dir = Path(input_dir)
-    shard_paths = sorted(input_dir.glob("shard-*.parquet"))
-    total_shards = len(shard_paths)
+    checkpoint: dict[str, Any],
+) -> None:
+    """Atomically persist completed input-shard state."""
+    path = _checkpoint_path(input_dir)
+    tmp = path.with_suffix(".tmp")
 
-    if not shard_paths:
+    with tmp.open("w", encoding="utf-8") as handle:
+        json.dump(checkpoint, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+    tmp.replace(path)
+
+
+def _tokenized_shard_paths(input_dir: str | Path) -> list[Path]:
+    paths = sorted(Path(input_dir).glob("shard-*.parquet"))
+    if not paths:
         raise FileNotFoundError(f"No tokenized shards found in {input_dir}")
+    return paths
 
-    total_rows_read = 0
-    start_time = time.perf_counter()
 
-    for shard_idx, shard_path in enumerate(shard_paths, start=1):
-        parquet_file = pq.ParquetFile(shard_path)
+def _shard_token_count(path: Path) -> int:
+    """Read only token_length to determine the exact shard token budget."""
+    total = 0
+    parquet_file = pq.ParquetFile(path)
+    for batch in parquet_file.iter_batches(
+        batch_size=262_144,
+        columns=["token_length"],
+    ):
+        total += int(pc.sum(batch.column("token_length")).as_py())
+    return total
 
-        for batch in parquet_file.iter_batches(batch_size=batch_size):
-            total_rows_read += batch.num_rows
+
+def _next_output_shard_index(output_dir: str | Path) -> int:
+    """Return the next free sequential output-shard index."""
+    output_dir = Path(output_dir)
+    existing = sorted(output_dir.glob("shard-*.parquet"))
+    if not existing:
+        return 0
+
+    return max(int(path.stem.split("-")[-1]) for path in existing) + 1
+
+
+class ResumableParquetShardWriter(ParquetShardWriter):
+    """ParquetShardWriter variant that never overwrites prior run output."""
+
+    def __init__(
+        self,
+        output_dir: str | Path,
+        rows_per_shard: int,
+        compression: str,
+    ) -> None:
+        super().__init__(
+            output_dir=output_dir,
+            rows_per_shard=rows_per_shard,
+            compression=compression,
+            compression_level=1,
+        )
+        self._shard_index = _next_output_shard_index(output_dir)
+
+
+def _new_output_writers(
+    embeddings_output_dir: str | Path,
+    likelihood_output_dir: str | Path,
+    quarantine_output_dir: str | Path,
+    rows_per_shard: int,
+    compression: str,
+):
+    return (
+        ResumableParquetShardWriter(
+            embeddings_output_dir,
+            rows_per_shard,
+            compression,
+        ),
+        ResumableParquetShardWriter(
+            likelihood_output_dir,
+            rows_per_shard,
+            compression,
+        ),
+        ResumableParquetShardWriter(
+            quarantine_output_dir,
+            rows_per_shard,
+            compression,
+        ),
+    )
+
+
+def _remove_output_shards_created_after(
+    output_dir: str | Path,
+    first_new_index: int,
+) -> None:
+    """Remove output files created by an input shard that did not commit."""
+    output_dir = Path(output_dir)
+    for path in output_dir.glob("shard-*.parquet"):
+        try:
+            index = int(path.stem.split("-")[-1])
+        except ValueError:
+            continue
+        if index >= first_new_index:
+            path.unlink(missing_ok=True)
+
+
+# ============================================================================
+# Batch reading
+# ============================================================================
+
+
+def iter_tokenized_shard_batches(
+    shard_path: Path,
+    batch_size: int,
+) -> Iterator[pa.RecordBatch]:
+    """Stream one tokenized input shard with only GPU-required columns."""
+    parquet_file = pq.ParquetFile(shard_path)
+    required_columns = [
+        "record_id",
+        "start",
+        "end",
+        "token_ids",
+        "token_mask",
+        "token_length",
+    ]
+
+    available = parquet_file.schema_arrow.names
+    missing = [column for column in required_columns if column not in available]
+    if missing:
+        raise ValueError(
+            f"{shard_path} is missing required GPU columns: {missing}"
+        )
+
+    for batch in parquet_file.iter_batches(
+        batch_size=batch_size,
+        columns=required_columns,
+    ):
+        if batch.num_rows:
             yield batch
-
-        if context is not None:
-            elapsed = time.perf_counter() - start_time
-            shards_done_pct = (shard_idx / total_shards) * 100
-            shards_per_sec = shard_idx / elapsed if elapsed > 0 else 0
-            eta_seconds = (
-                (total_shards - shard_idx) / shards_per_sec if shards_per_sec > 0 else 0
-            )
-
-            context.log.info(
-                f"[Shard Progress {shard_idx}/{total_shards} ({shards_done_pct:.1f}%)] "
-                f"Rows: {total_rows_read:,} | Elapsed: {elapsed / 60:.1f}m | ETA: {eta_seconds / 60:.1f}m"
-            )
 
 
 # ============================================================================
@@ -682,82 +771,176 @@ def process_gpu_enrichment(
     carbon_resource: CarbonModelResource,
     buckets: list[BucketBatchConfig] | None = None,
     context: dg.AssetExecutionContext | None = None,
+    max_tokens_per_run: int = DEFAULT_GPU_TOKEN_BUDGET,
 ) -> GpuEnrichmentStats:
-    """Single-pass GPU enrichment: embeddings + likelihood stats, bucketed, checkpointed, OOM-resilient."""
-    import torch
+    """Run one resumable token-budgeted GPU enrichment pass."""
+    if max_tokens_per_run <= 0:
+        raise ValueError("max_tokens_per_run must be greater than zero")
 
     buckets = buckets or CARBON_3B_A100_HIGH_OCCUPANCY_CONFIGS
+
+    input_dir = Path(input_dir)
+    embedding_output_dir = Path(embeddings_output_dir)
+    likelihood_output_dir = Path(likelihood_output_dir)
+    quarantine_output_dir = Path(quarantine_output_dir)
+
+    shard_paths = _tokenized_shard_paths(input_dir)
+    checkpoint = _load_checkpoint(input_dir)
+    completed_shards: dict[str, Any] = checkpoint["completed_shards"]
 
     raw_model = carbon_resource.model
     tokenizer = carbon_resource.tokenizer
 
-    # Pre-warm static compilation buckets
     compile_start = time.perf_counter()
     compiled_model = carbon_resource.compile_for_buckets(buckets)
     compile_setup_seconds = time.perf_counter() - compile_start
 
-    stats = GpuEnrichmentStats(compile_setup_seconds=compile_setup_seconds)
+    stats = GpuEnrichmentStats(
+        compile_setup_seconds=compile_setup_seconds,
+    )
     torch.cuda.reset_peak_memory_stats()
 
     inference_start = time.perf_counter()
+    run_tokens = 0
+    run_rows = 0
+    shards_committed_this_run = 0
 
-    with (
-        ParquetShardWriter(
-            embeddings_output_dir,
-            rows_per_shard,
-            compression,
-            compression_level=1,
-        ) as emb_writer,
-        ParquetShardWriter(
+    for shard_path in shard_paths:
+        shard_name = shard_path.name
+
+        if shard_name in completed_shards:
+            continue
+
+        shard_tokens = _shard_token_count(shard_path)
+
+        if run_tokens > 0 and run_tokens + shard_tokens > max_tokens_per_run:
+            if context is not None:
+                context.log.info(
+                    f"GPU token budget reached: run_tokens={run_tokens:,}, "
+                    f"next_shard={shard_name}, next_shard_tokens={shard_tokens:,}, "
+                    f"budget={max_tokens_per_run:,}. Stopping cleanly."
+                )
+            break
+
+        if context is not None:
+            context.log.info(
+                f"Processing {shard_name}: {shard_tokens:,} tokens; "
+                f"run budget {run_tokens:,}/{max_tokens_per_run:,}."
+            )
+
+        emb_start_index = _next_output_shard_index(embedding_output_dir)
+        like_start_index = _next_output_shard_index(likelihood_output_dir)
+        quarantine_start_index = _next_output_shard_index(quarantine_output_dir)
+
+        emb_writer, like_writer, quarantine_writer = _new_output_writers(
+            embedding_output_dir,
             likelihood_output_dir,
-            rows_per_shard,
-            compression,
-            compression_level=1,
-        ) as like_writer,
-        ParquetShardWriter(
             quarantine_output_dir,
             rows_per_shard,
             compression,
-            compression_level=1,
-        ) as quarantine_writer,
-    ):
-        for raw_batch in iter_tokenized_batches(input_dir, batch_size, context=context):
-            if raw_batch.num_rows == 0:
-                continue
+        )
 
-            stats.rows_read += raw_batch.num_rows
-            grouped = _group_by_bucket(raw_batch, buckets)
+        shard_stats_before = (
+            stats.rows_read,
+            stats.rows_enriched,
+            stats.rows_quarantined,
+            stats.tokens_processed,
+            stats.batches_processed,
+        )
 
-            for bucket_max, bucket_batch in grouped.items():
-                bucket = next(b for b in buckets if b.bucket_max_tokens == bucket_max)
-                active_model = compiled_model if bucket.compile_enabled else raw_model
+        try:
+            with emb_writer, like_writer, quarantine_writer:
+                for raw_batch in iter_tokenized_shard_batches(
+                    shard_path,
+                    batch_size,
+                ):
+                    stats.rows_read += raw_batch.num_rows
+                    grouped = _group_by_bucket(raw_batch, buckets)
 
-                emb_batch, like_batch, quarantine_batch = (
-                    _run_bucket_batch_with_oom_retry(
-                        active_model, tokenizer, bucket_batch, bucket, stats
-                    )
+                    for bucket_max, bucket_batch in grouped.items():
+                        bucket = next(
+                            b for b in buckets
+                            if b.bucket_max_tokens == bucket_max
+                        )
+                        active_model = (
+                            compiled_model
+                            if bucket.compile_enabled
+                            else raw_model
+                        )
+
+                        emb_batch, like_batch, quarantine_batch = (
+                            _run_bucket_batch_with_oom_retry(
+                                active_model,
+                                tokenizer,
+                                bucket_batch,
+                                bucket,
+                                stats,
+                            )
+                        )
+
+                        if emb_batch is not None and emb_batch.num_rows > 0:
+                            emb_writer.write_batch(emb_batch)
+                            stats.rows_enriched += emb_batch.num_rows
+
+                        if like_batch is not None and like_batch.num_rows > 0:
+                            like_writer.write_batch(like_batch)
+
+                        if (
+                            quarantine_batch is not None
+                            and quarantine_batch.num_rows > 0
+                        ):
+                            quarantine_writer.write_batch(quarantine_batch)
+
+                    stats.batches_processed += 1
+
+            completed_shards[shard_name] = {
+                "tokens": shard_tokens,
+                "rows": stats.rows_read - shard_stats_before[0],
+            }
+            checkpoint["completed_shards"] = completed_shards
+            checkpoint["last_committed_shard"] = shard_name
+            checkpoint["last_committed_at"] = time.time()
+            _save_checkpoint(input_dir, checkpoint)
+
+            run_tokens += shard_tokens
+            run_rows += completed_shards[shard_name]["rows"]
+            shards_committed_this_run += 1
+
+            stats.embedding_shards_written += (
+                emb_writer.shards_written
+            )
+            stats.likelihood_shards_written += (
+                like_writer.shards_written
+            )
+
+            if context is not None:
+                context.log.info(
+                    f"Committed {shard_name}: "
+                    f"{shard_tokens:,} tokens; "
+                    f"run total={run_tokens:,}/{max_tokens_per_run:,}."
                 )
 
-                if emb_batch is not None and emb_batch.num_rows > 0:
-                    emb_writer.write_batch(emb_batch)
-                    stats.rows_enriched += emb_batch.num_rows
-
-                if like_batch is not None and like_batch.num_rows > 0:
-                    like_writer.write_batch(like_batch)
-
-                if quarantine_batch is not None and quarantine_batch.num_rows > 0:
-                    quarantine_writer.write_batch(quarantine_batch)
-
-            stats.batches_processed += 1
-
-        stats.embedding_shards_written = emb_writer.shards_written
-        stats.likelihood_shards_written = like_writer.shards_written
+        except Exception:
+            _remove_output_shards_created_after(
+                embedding_output_dir,
+                emb_start_index,
+            )
+            _remove_output_shards_created_after(
+                likelihood_output_dir,
+                like_start_index,
+            )
+            _remove_output_shards_created_after(
+                quarantine_output_dir,
+                quarantine_start_index,
+            )
+            torch.cuda.empty_cache()
+            gc.collect()
+            raise
 
     stats.inference_seconds = time.perf_counter() - inference_start
     stats.peak_memory_allocated_bytes = torch.cuda.max_memory_allocated()
     stats.peak_memory_reserved_bytes = torch.cuda.max_memory_reserved()
 
-    # Integrity reconciliation check
     reconciled_rows = stats.rows_enriched + stats.rows_quarantined
     if reconciled_rows != stats.rows_read:
         raise RuntimeError(
@@ -769,7 +952,11 @@ def process_gpu_enrichment(
 
     if context is not None:
         context.log.info(
-            "GPU enrichment complete: "
+            "GPU enrichment run complete: "
+            f"shards_committed={shards_committed_this_run}, "
+            f"rows={run_rows:,}, "
+            f"run_tokens={run_tokens:,}, "
+            f"budget={max_tokens_per_run:,}, "
             f"elapsed={stats.inference_seconds:.2f}s, "
             f"pure_gpu_tok/s={stats.pure_gpu_tokens_per_sec:,.0f}, "
             f"e2e_tok/s={stats.e2e_pipeline_tokens_per_sec:,.0f}, "
@@ -783,7 +970,7 @@ def process_gpu_enrichment(
 
 
 # ============================================================================
-# Dagster multi_asset — single forward pass, two outputs (#14)
+# Dagster multi_asset
 # ============================================================================
 
 
@@ -791,14 +978,12 @@ def process_gpu_enrichment(
     outs={
         "carbon_embeddings": dg.AssetOut(
             description=(
-                "Mean-pooled raw hidden-state embeddings, one row per "
-                "record_id (#9: raw only, never UMAP coords)."
+                "Mean-pooled raw hidden-state embeddings, one row per record_id."
             )
         ),
         "carbon_likelihood_stats": dg.AssetOut(
             description=(
-                "Per-sequence log-prob/perplexity stats derived from "
-                "logits, discarded immediately after extraction (#3)."
+                "Per-sequence log-prob/perplexity stats derived from logits."
             )
         ),
     },
@@ -811,30 +996,30 @@ def carbon_gpu_enrichment(
     config: CarbonPipelineConfig,
     carbon: CarbonModelResource,
 ):
-    """Single model(ids, output_hidden_states=False) forward pass per bucketed
-
-    batch, emitting both embeddings and likelihood stats (#14). Bucketed
-    by token length (#1), OOM-resilient (#23), record_id preserved as the
-    immutable join key (#8) and asserted below.
-    """
+    """Single model(ids, output_hidden_states=False) forward pass per bucketed batch."""
     context.log.info(f"model_checkpoint={carbon.model_checkpoint!r}")
     context.log.info(f"tokenizer_revision={carbon.tokenizer_revision!r}")
 
     stats = process_gpu_enrichment(
         input_dir=config.tokenized_output_dir,
-        embeddings_output_dir=f"{config.tokenized_output_dir}_embeddings",
-        likelihood_output_dir=f"{config.tokenized_output_dir}_likelihood",
+        embeddings_output_dir=config.embeddings_output_dir,
+        likelihood_output_dir=config.likelihood_output_dir,
         quarantine_output_dir=f"{config.tokenized_output_dir}_quarantine",
         batch_size=config.batch_size,
         rows_per_shard=config.rows_per_shard,
         compression=config.compression,
         carbon_resource=carbon,
         context=context,
+        max_tokens_per_run=getattr(
+            config,
+            "gpu_token_budget",
+            DEFAULT_GPU_TOKEN_BUDGET,
+        ),
     )
 
     if stats.oom_retries_by_bucket:
         context.log.warning(
-            "OOM retries observed — revise the M3.5 bucket/batch lookup table: "
+            "OOM retries observed: "
             f"{stats.oom_retries_by_bucket}"
         )
 
@@ -850,6 +1035,11 @@ def carbon_gpu_enrichment(
         "batches_processed": stats.batches_processed,
         "forward_passes": stats.forward_passes,
         "tokens_processed": stats.tokens_processed,
+        "gpu_token_budget": getattr(
+            config,
+            "gpu_token_budget",
+            DEFAULT_GPU_TOKEN_BUDGET,
+        ),
         "pure_gpu_tokens_per_sec": stats.pure_gpu_tokens_per_sec,
         "e2e_pipeline_tokens_per_sec": stats.e2e_pipeline_tokens_per_sec,
         "e2e_pipeline_samples_per_sec": stats.e2e_pipeline_samples_per_sec,
@@ -864,8 +1054,7 @@ def carbon_gpu_enrichment(
     }
 
     yield dg.MaterializeResult(
-        None,
-        output_name="carbon_embeddings",
+        asset_key="carbon_embeddings",
         metadata={
             **metadata,
             "parquet_shards": stats.embedding_shards_written,
@@ -873,8 +1062,7 @@ def carbon_gpu_enrichment(
     )
 
     yield dg.MaterializeResult(
-        None,
-        output_name="carbon_likelihood_stats",
+        asset_key="carbon_likelihood_stats",
         metadata={
             **metadata,
             "parquet_shards": stats.likelihood_shards_written,

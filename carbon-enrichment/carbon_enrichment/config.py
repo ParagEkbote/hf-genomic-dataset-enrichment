@@ -97,6 +97,8 @@ class CarbonPipelineConfig(dg.Config):
 
     cpu_workers: int | None = None
 
+    gpu_token_budget: int = 500_000_000
+
 
 # ============================================================================
 # Local storage configuration
