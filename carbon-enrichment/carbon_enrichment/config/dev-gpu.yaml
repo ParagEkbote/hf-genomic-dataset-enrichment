@@ -1,23 +1,19 @@
 # config/dev-gpu.yaml
 
-validation_level: integration
+ops:
+  carbon_gpu_enrichment:
+    config:
+      # Tokenized corpus is already produced.
+      tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus_sample_300m"
 
-streaming: true
+      # GPU enrichment outputs
+      embeddings_output_dir: ".dagster_hf_storage/carbon_embeddings"
+      likelihood_output_dir: ".dagster_hf_storage/carbon_likelihood_stats"
 
-# Tokenized corpus is already produced.
-tokenized_output_dir: ".dagster_hf_storage/carbon_tokenized_corpus"
+      # GPU processing
+      batch_size: 150
+      rows_per_shard: 250000
+      gpu_token_budget: 20000000
 
-# GPU enrichment outputs
-embeddings_output_dir: ".dagster_hf_storage/carbon_embeddings"
-likelihood_output_dir: ".dagster_hf_storage/carbon_likelihood_stats"
-
-# GPU processing
-batch_size: 1000
-rows_per_shard: 250000
-gpu_token_budget: 100000000
-
-# Storage
-compression: "zstd"
-
-# Not relevant to GPU inference, but retained for config completeness
-enable_progress: true
+      # Storage
+      compression: "zstd"

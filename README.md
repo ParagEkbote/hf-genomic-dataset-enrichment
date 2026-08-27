@@ -19,7 +19,7 @@ dagster job execute \
 
 dagster job execute \
   -m carbon_enrichment.definitions \
-  -j carbon_tokenize_job \
+  -j carbon_inference_job \
   -c config/dev-gpu.yaml
 ```
 

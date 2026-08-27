@@ -42,61 +42,26 @@ logger = logging.getLogger(__name__)
 DEFAULT_GPU_TOKEN_BUDGET = 500_000_000
 GPU_CHECKPOINT_FILENAME = "gpu_enrichment_checkpoint.json"
 
+# Max rows to run through the lm_head at once. With a 156k vocab in bf16,
+# a (chunk, T, V) logits tensor costs roughly chunk * T * 156_000 * 2 bytes.
+# At T=512 that's ~2.55 GB for chunk=16. Tune empirically via
+# stats.peak_memory_allocated_bytes; raise for throughput if headroom exists,
+# lower if still tight.
+DEFAULT_LOGIT_CHUNK_SIZE = 16
+
 
 # ============================================================================
 # Constants & Bucket Configuration (A100 80GB High Occupancy)
 # ============================================================================
 
 CARBON_3B_A100_HIGH_OCCUPANCY_CONFIGS: list[BucketBatchConfig] = [
-    BucketBatchConfig(
-        bucket_max_tokens=512,
-        batch_size=320,
-        dtype="bfloat16",
-        attn_backend="kernels-community/flash-attn2",
-        compile_enabled=True,
-    ),
-    BucketBatchConfig(
-        bucket_max_tokens=1024,
-        batch_size=160,
-        dtype="bfloat16",
-        attn_backend="kernels-community/flash-attn2",
-        compile_enabled=True,
-    ),
-    BucketBatchConfig(
-        bucket_max_tokens=2048,
-        batch_size=80,
-        dtype="bfloat16",
-        attn_backend="kernels-community/flash-attn2",
-        compile_enabled=True,
-    ),
-    BucketBatchConfig(
-        bucket_max_tokens=4096,
-        batch_size=40,
-        dtype="bfloat16",
-        attn_backend="kernels-community/flash-attn2",
-        compile_enabled=True,
-    ),
-    BucketBatchConfig(
-        bucket_max_tokens=8192,
-        batch_size=20,
-        dtype="bfloat16",
-        attn_backend="kernels-community/flash-attn2",
-        compile_enabled=True,
-    ),
-    BucketBatchConfig(
-        bucket_max_tokens=16384,
-        batch_size=8,
-        dtype="bfloat16",
-        attn_backend="kernels-community/flash-attn2",
-        compile_enabled=True,
-    ),
-    BucketBatchConfig(
-        bucket_max_tokens=32768,
-        batch_size=4,
-        dtype="bfloat16",
-        attn_backend="kernels-community/flash-attn2",
-        compile_enabled=False,
-    ),
+    BucketBatchConfig(bucket_max_tokens=512,   batch_size=160, dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=True),
+    BucketBatchConfig(bucket_max_tokens=1024,  batch_size=80,  dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=True),
+    BucketBatchConfig(bucket_max_tokens=2048,  batch_size=40,  dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=True),
+    BucketBatchConfig(bucket_max_tokens=4096,  batch_size=20,  dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=True),
+    BucketBatchConfig(bucket_max_tokens=8192,  batch_size=8,   dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=True),
+    BucketBatchConfig(bucket_max_tokens=16384, batch_size=2,   dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=False),
+    BucketBatchConfig(bucket_max_tokens=32768, batch_size=1,   dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=False),
 ]
 
 
@@ -312,37 +277,9 @@ def _pad_batch(
 
 
 # ============================================================================
-# Single forward pass
+# Likelihood stats (operates on whatever logits slice it's given —
+# full batch or a chunk; shapes just need to line up)
 # ============================================================================
-
-
-def _run_forward_pass(
-    model: Any,
-    tokenizer: Any,
-    chunk: pa.RecordBatch,
-    bucket: BucketBatchConfig,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """One model(ids, output_hidden_states=False) call for one GPU-batch."""
-    input_ids, token_mask = _pad_batch(
-        chunk.column("token_ids"),
-        chunk.column("token_mask"),
-        tokenizer.pad_token_id,
-        bucket.bucket_max_tokens,
-    )
-
-    input_ids = input_ids.to(model.device, non_blocking=True)
-    token_mask = token_mask.to(model.device, non_blocking=True)
-
-    attention_mask = (token_mask != TOKEN_MASK_PADDING).to(torch.long)
-
-    with torch.inference_mode():
-        outputs = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=False,
-        )
-
-    return outputs.logits, outputs.last_hidden_state, input_ids, token_mask
 
 
 def _extract_likelihood_stats(
@@ -402,6 +339,14 @@ def _extract_likelihood_stats(
     }
 
 
+def _concat_likelihood_arrays(
+    chunks: list[dict[str, pa.Array]],
+) -> dict[str, pa.Array]:
+    """Reassemble per-chunk likelihood stat dicts into full-batch arrays."""
+    keys = chunks[0].keys()
+    return {key: pa.concat_arrays([c[key] for c in chunks]) for key in keys}
+
+
 def _extract_pooled_embeddings(
     last_hidden_state: torch.Tensor,
     token_mask: torch.Tensor,
@@ -425,6 +370,110 @@ def _extract_pooled_embeddings(
     return embedding_array, norm_array
 
 
+def _resolve_base_model(model: Any) -> Any:
+    """Best-effort resolution of the transformer body without the lm_head.
+
+    Adjust this if CarbonModelResource exposes the backbone under a
+    different attribute (e.g. model.transformer) — the goal is simply to
+    run the forward pass without the final vocab projection so we control
+    when/how the lm_head is applied.
+    """
+    return getattr(model, "model", None) or getattr(model, "base_model", model)
+
+
+# ============================================================================
+# Single forward pass — chunked lm_head to avoid materializing full-batch
+# (B, T, V) logits. With vocab ~156k, a full (320, 512, 156_000) bf16 logits
+# tensor is ~51 GB by itself; chunking keeps peak logits memory bounded to
+# (logit_chunk_size, T, V) regardless of the outer batch size.
+# ============================================================================
+
+def _resolve_logit_chunk_size(
+    bucket_max_tokens: int,
+    base_chunk: int = DEFAULT_LOGIT_CHUNK_SIZE,
+    base_tokens: int = 512,
+) -> int:
+    """Scale the lm_head row-chunk size inversely with sequence length so
+    chunk_size * T (and hence the (chunk, T, V) logits tensor) stays roughly
+    constant across buckets, instead of the fixed row-count blowing up
+    memory linearly with T at long sequence lengths."""
+    return max(1, (base_chunk * base_tokens) // bucket_max_tokens)
+
+
+def _run_forward_pass(
+    model: Any,
+    tokenizer: Any,
+    chunk: pa.RecordBatch,
+    bucket: BucketBatchConfig,
+    logit_chunk_size: int = DEFAULT_LOGIT_CHUNK_SIZE,
+    use_fp32_reduction: bool = False,
+) -> tuple[dict[str, pa.Array], torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Base-model forward once; lm_head + likelihood reduction run per
+    row-chunk so full-batch logits are never resident at once.
+
+    logit_chunk_size here is the *base* chunk size (i.e. the value tuned
+    for bucket.bucket_max_tokens == base_tokens, default 512). The actual
+    per-call chunk size is resolved against bucket.bucket_max_tokens so
+    that chunk_size * T stays roughly constant across buckets — a fixed
+    row count would otherwise make the (chunk, T, V) logits tensor grow
+    linearly with T and OOM at long sequence lengths.
+
+    Returns (likelihood_arrays, last_hidden_state, input_ids, token_mask).
+    last_hidden_state is still returned in full — it's needed for pooled
+    embeddings and is far smaller than logits (H << V).
+    """
+    input_ids, token_mask = _pad_batch(
+        chunk.column("token_ids"),
+        chunk.column("token_mask"),
+        tokenizer.pad_token_id,
+        bucket.bucket_max_tokens,
+    )
+
+    input_ids = input_ids.to(model.device, non_blocking=True)
+    token_mask = token_mask.to(model.device, non_blocking=True)
+
+    attention_mask = (token_mask != TOKEN_MASK_PADDING).to(torch.long)
+
+    base_model = _resolve_base_model(model)
+
+    resolved_logit_chunk_size = _resolve_logit_chunk_size(
+        bucket.bucket_max_tokens,
+        base_chunk=logit_chunk_size,
+    )
+
+    with torch.inference_mode():
+        base_outputs = base_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        )
+        last_hidden_state = base_outputs.last_hidden_state  # (B, T, H)
+
+        num_rows = last_hidden_state.shape[0]
+        likelihood_chunks: list[dict[str, pa.Array]] = []
+
+        for start in range(0, num_rows, resolved_logit_chunk_size):
+            end = min(start + resolved_logit_chunk_size, num_rows)
+
+            chunk_logits = model.lm_head(last_hidden_state[start:end])  # (c, T, V)
+            chunk_ids = input_ids[start:end]
+            chunk_mask = token_mask[start:end]
+
+            likelihood_chunks.append(
+                _extract_likelihood_stats(
+                    chunk_logits,
+                    chunk_ids,
+                    chunk_mask,
+                    use_fp32_reduction=use_fp32_reduction,
+                )
+            )
+
+            del chunk_logits  # freed before the next chunk allocates
+
+    likelihood_arrays = _concat_likelihood_arrays(likelihood_chunks)
+
+    return likelihood_arrays, last_hidden_state, input_ids, token_mask
+
+
 # ============================================================================
 # OOM retry cascade
 # ============================================================================
@@ -437,6 +486,7 @@ def _run_bucket_batch_with_oom_retry(
     bucket: BucketBatchConfig,
     stats: GpuEnrichmentStats,
     use_fp32_reduction: bool = False,
+    logit_chunk_size: int = DEFAULT_LOGIT_CHUNK_SIZE,
 ) -> tuple[pa.RecordBatch | None, pa.RecordBatch | None, pa.RecordBatch | None]:
     """Run the forward pass with OOM backoff: full batch -> 1/2 -> 1/4 -> singleton -> quarantine."""
     n = record_batch.num_rows
@@ -472,8 +522,13 @@ def _run_bucket_batch_with_oom_retry(
 
             try:
                 gpu_start = time.perf_counter()
-                logits, last_hidden, input_ids, token_mask = _run_forward_pass(
-                    model, tokenizer, chunk, bucket
+                like_arrays, last_hidden, input_ids, token_mask = _run_forward_pass(
+                    model,
+                    tokenizer,
+                    chunk,
+                    bucket,
+                    logit_chunk_size=logit_chunk_size,
+                    use_fp32_reduction=use_fp32_reduction,
                 )
                 torch.cuda.synchronize()
                 stats.gpu_forward_seconds += time.perf_counter() - gpu_start
@@ -497,10 +552,8 @@ def _run_bucket_batch_with_oom_retry(
                 )
                 emb_batches.append(emb_batch)
 
-                # 2. Likelihood Record Batch
-                like_arrays = _extract_likelihood_stats(
-                    logits, input_ids, token_mask, use_fp32_reduction=use_fp32_reduction
-                )
+                # 2. Likelihood Record Batch (already computed per-chunk in
+                #    _run_forward_pass and reassembled into full-batch arrays)
                 like_batch = pa.RecordBatch.from_arrays(
                     [
                         record_ids,
@@ -518,7 +571,7 @@ def _run_bucket_batch_with_oom_retry(
                 )
                 like_batches.append(like_batch)
 
-                del logits, last_hidden, input_ids, token_mask
+                del last_hidden, input_ids, token_mask
                 offset += chunk.num_rows
                 succeeded = True
                 break
@@ -772,6 +825,7 @@ def process_gpu_enrichment(
     buckets: list[BucketBatchConfig] | None = None,
     context: dg.AssetExecutionContext | None = None,
     max_tokens_per_run: int = DEFAULT_GPU_TOKEN_BUDGET,
+    logit_chunk_size: int = DEFAULT_LOGIT_CHUNK_SIZE,
 ) -> GpuEnrichmentStats:
     """Run one resumable token-budgeted GPU enrichment pass."""
     if max_tokens_per_run <= 0:
@@ -875,6 +929,7 @@ def process_gpu_enrichment(
                                 bucket_batch,
                                 bucket,
                                 stats,
+                                logit_chunk_size=logit_chunk_size,
                             )
                         )
 
@@ -996,7 +1051,8 @@ def carbon_gpu_enrichment(
     config: CarbonPipelineConfig,
     carbon: CarbonModelResource,
 ):
-    """Single model(ids, output_hidden_states=False) forward pass per bucketed batch."""
+    """Base-model forward pass with chunked lm_head per bucketed batch,
+    so full-batch (B, T, V) logits are never materialized at once."""
     context.log.info(f"model_checkpoint={carbon.model_checkpoint!r}")
     context.log.info(f"tokenizer_revision={carbon.tokenizer_revision!r}")
 
@@ -1014,6 +1070,11 @@ def carbon_gpu_enrichment(
             config,
             "gpu_token_budget",
             DEFAULT_GPU_TOKEN_BUDGET,
+        ),
+        logit_chunk_size=getattr(
+            config,
+            "logit_chunk_size",
+            DEFAULT_LOGIT_CHUNK_SIZE,
         ),
     )
 
