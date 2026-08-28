@@ -1,180 +1,91 @@
 """
-DuckDB analytics layer for the Carbon pipeline.
+DuckDB analytics and provenance-validation layer for the Carbon pipeline.
 
-This module owns SQL-based provenance validation and reusable feature
-statistics. Faceberg.PipelineCatalog owns the catalog / Iceberg access
-layer.
+Faceberg.PipelineCatalog owns the Iceberg/catalog access layer.
+This module owns SQL-based Phase 1 lineage checks and reusable Phase 2+
+feature statistics.
 
-Phase 1 validates the declared lineage:
+Declared lineage:
 
-    pretraining split
+    pretraining corpus
+        -> pretraining split
         -> cpu_enriched
         -> sampled_cpu
         -> tokenized
         -> {likelihood_stats, embeddings}
 
-The important sampling edge is:
+The CPU sampling edge is:
 
     cpu_enriched
         -> sampled_cpu
 
-where sampled_cpu is the stratified CPU-enriched population used as the
-GPU input corpus.
+Sampling implementation, as defined by sampling.py:
 
-The sampling assertion is based on the declared strata:
+    deterministic SHA-256 per-row hash
+    + uniform inclusion fraction
 
-    - length bucket proxy
-    - coding status
+with representativeness measured across:
+
+    - sequence-length bucket proxy
+    - is_coding_region
     - strand
-    - taxonomy domain
+    - taxonomy_domain
 
-The physical biological columns are not renamed. Derived sampling
-dimensions are computed in DuckDB.
+The four sampling dimensions already exist in cpu_enriched because they
+are materialized by enrichment.py:
 
-NOTE:
-The exact length-bucket boundaries and exact coding-status rule must
-match the implementation that produced pilot_corpus_dedup. They are
-therefore explicit configuration below rather than silently invented.
+    sequence_length
+    is_coding_region
+    strand
+    taxonomy_domain
+
+Therefore DuckDB validates the same physical columns rather than
+inventing alternate schema names.
+
+The length proxy buckets are:
+
+    <= 512
+    <= 2048
+    <= 8192
+    <= 32768
+    > 32768
+
+The sampler's representativeness check uses a 2.0 percentage-point
+warning threshold. It is a warning rather than a hard sampling gate.
+
+Important bounded-input caveat:
+sampling.py validates the composition of the bounded source actually
+consumed by a run. A small validation run does not establish
+representativeness of the complete ~32.4M-row CPU-enriched population.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
-from faceberg import PIPELINE_TABLES, PipelineCatalog
-
-
-# ============================================================================
-# Sampling configuration
-# ============================================================================
-
-# These are the four conceptual strata used by the sampling operation.
-SAMPLING_STRATA: tuple[str, ...] = (
-    "length_bucket",
-    "coding_status",
-    "strand",
-    "taxonomy_domain",
+from faceberg import (
+    PIPELINE_TABLES,
+    PipelineCatalog,
+    SAMPLING_DRIFT_WARNING_THRESHOLD_PCT,
+    SAMPLING_STRATIFICATION_VARIABLES,
 )
 
 
-# ---------------------------------------------------------------------------
-# Derived expressions
-# ---------------------------------------------------------------------------
-
-# The source schema contains start/end coordinates, so sequence length can
-# be derived without reading the sequence payload.
-#
-# This expression intentionally returns the coordinate span:
-#
-#     end - start
-#
-# The bucket boundaries themselves are NOT invented here.
-#
-# Replace LENGTH_BUCKET_EXPR with the exact bucket expression used by the
-# original deterministic sampling job once those boundaries are confirmed.
-
-LENGTH_EXPR = """
-    GREATEST(
-        CAST(end AS BIGINT) - CAST(start AS BIGINT),
-        0
-    )
-"""
-
-
-# IMPORTANT:
-# Replace this with the exact coding-status rule used by the sampler.
-#
-# This default is deliberately based on the existing CPU-enriched field
-# `is_coding_region`, because the current pipeline already references that
-# field. If the original sampler instead used gene_type, change only this
-# expression.
-CODING_STATUS_EXPR = """
-    CASE
-        WHEN is_coding_region IS TRUE THEN 'coding'
-        WHEN is_coding_region IS FALSE THEN 'non_coding'
-        ELSE 'unknown'
-    END
-"""
-
-
-# Taxonomy domain is derived from the physical taxonomy string.
-#
-# Example:
-#
-#     Eukaryota;Fungi;Dikarya;...
-#
-# becomes:
-#
-#     Eukaryota
-#
-# This preserves the canonical `taxonomy` column rather than renaming it.
-TAXONOMY_DOMAIN_EXPR = """
-    NULLIF(
-        TRIM(
-            SPLIT_PART(
-                COALESCE(taxonomy, ''),
-                ';',
-                1
-            )
-        ),
-        ''
-    )
-"""
-
-
 # ============================================================================
-# Length bucket configuration
+# Constants
 # ============================================================================
 
-# Set these to the exact boundaries used by the original sampling job.
-#
-# Example shape only:
-#
-#     LENGTH_BUCKET_BOUNDARIES = (
-#         (100, "lt_100"),
-#         (1000, "100_999"),
-#         ...
-#     )
-#
-# They are intentionally empty until the actual sampling configuration
-# is available. This prevents the provenance validator from claiming
-# that an arbitrary bucketing scheme reproduces the historical sample.
+PRETRAINING_SPLIT_ROW_COUNT = 46_300_000
+CPU_ENRICHED_EXPECTED_FRACTION = 0.70
 
-LENGTH_BUCKET_BOUNDARIES: tuple[tuple[int, str], ...] = ()
-
-
-def length_bucket_sql() -> str:
-    """Return the exact SQL expression for the sampling length bucket.
-
-    The bucket definition must be supplied from the actual sampling
-    implementation before the Phase 1 sampling assertion is considered
-    fully reproducible.
-    """
-
-    if not LENGTH_BUCKET_BOUNDARIES:
-        raise RuntimeError(
-            "LENGTH_BUCKET_BOUNDARIES is not configured. "
-            "Set it to the exact length-bucket boundaries used by "
-            "the original stratified sampling job."
-        )
-
-    clauses: list[str] = []
-
-    for upper_bound, label in LENGTH_BUCKET_BOUNDARIES:
-        clauses.append(
-            f"WHEN {LENGTH_EXPR} < {upper_bound} "
-            f"THEN '{label}'"
-        )
-
-    last_label = LENGTH_BUCKET_BOUNDARIES[-1][1]
-
-    return (
-        "CASE\n"
-        + "\n".join(f"        {clause}" for clause in clauses)
-        + f"\n        ELSE '{last_label}_plus'\n"
-        + "    END"
-    )
+LENGTH_PROXY_BUCKET_LABELS: tuple[str, ...] = (
+    "<=512",
+    "513-2048",
+    "2049-8192",
+    "8193-32768",
+    ">32768",
+)
 
 
 # ============================================================================
@@ -189,10 +100,8 @@ def get_connection(
 
     import duckdb
 
-    con = duckdb.connect(config=config or {})
-
+    con =  cast(Any, duckdb).connect(config=config or {})
     con.execute("INSTALL iceberg; LOAD iceberg")
-
     return con
 
 
@@ -213,95 +122,65 @@ def _table(node_id: str) -> str:
 
 
 # ============================================================================
-# Derived sampling dimensions
+# Sampling-derived expressions
 # ============================================================================
 
 
-def sampling_projection(
-    *,
-    source_table: str,
+def length_bucket_expression(
+    field: str = "sequence_length",
 ) -> str:
-    """Build the SQL SELECT projection containing sampling dimensions.
+    """Return the exact SQL equivalent of sampling.py's proxy buckets.
 
-    The physical dataset columns remain untouched. The sampling fields
-    are derived only for validation/analytics.
+    sampling.py uses upper bounds 512, 2048, 8192 and 32768, and -1 for
+    the final infinity bucket. Here we use human-readable labels while
+    preserving the same boundaries.
     """
 
     return f"""
-        SELECT
-            *,
-            {length_bucket_sql()} AS length_bucket,
-            {CODING_STATUS_EXPR} AS coding_status,
-            {TAXONOMY_DOMAIN_EXPR} AS taxonomy_domain
-        FROM {source_table}
+        CASE
+            WHEN {field} <= 512 THEN '<=512'
+            WHEN {field} <= 2048 THEN '513-2048'
+            WHEN {field} <= 8192 THEN '2049-8192'
+            WHEN {field} <= 32768 THEN '8193-32768'
+            ELSE '>32768'
+        END
     """
 
 
-def sampling_stratum_proportions(
-    catalog: PipelineCatalog,
+def sampling_dimensions_sql(
     *,
-    node_id: str,
-) -> dict[str, Any]:
-    """Calculate proportions for the four declared sampling strata."""
+    table: str,
+) -> str:
+    """Return a SELECT that exposes the exact sampling dimensions."""
 
-    table = _table(node_id)
-
-    sql = f"""
-        WITH derived AS (
-            {sampling_projection(source_table=table)}
-        )
+    return f"""
         SELECT
-            length_bucket,
-            coding_status,
-            strand,
-            taxonomy_domain,
-            COUNT(*) AS n,
-            COUNT(*) * 1.0
-                / SUM(COUNT(*)) OVER () AS proportion
-        FROM derived
-        GROUP BY
-            length_bucket,
-            coding_status,
+            {length_bucket_expression("sequence_length")}
+                AS length_bucket,
+            is_coding_region,
             strand,
             taxonomy_domain
-        ORDER BY
-            length_bucket,
-            coding_status,
-            strand,
-            taxonomy_domain
+        FROM {table}
     """
 
-    return {
-        "joint": catalog.query(sql)
-    }
+
+# ============================================================================
+# Proportion helpers
+# ============================================================================
 
 
-def stratum_proportions(
-    catalog: PipelineCatalog,
+def _independent_stratum_proportions_sql(
     *,
-    node_id: str,
-) -> dict[str, Any]:
-    """Return independent distribution proportions for each sampler stratum.
+    table: str,
+) -> str:
+    """Build independent proportion distributions for each sampler field."""
 
-    This is the primary Phase 1 representation for comparing
-    cpu_enriched against sampled_cpu.
-    """
-
-    table = _table(node_id)
-
-    sql = f"""
+    return f"""
         WITH derived AS (
-            {sampling_projection(source_table=table)}
-        )
-        SELECT
-            stratum_name,
-            stratum,
-            COUNT(*) AS n,
-            COUNT(*) * 1.0
-                / SUM(COUNT(*)) OVER (
-                    PARTITION BY stratum_name
-                ) AS proportion
-        FROM (
+            {sampling_dimensions_sql(table=table)}
+        ),
+
+        strata AS (
             SELECT
                 'length_bucket' AS stratum_name,
                 CAST(length_bucket AS VARCHAR) AS stratum
@@ -310,8 +189,8 @@ def stratum_proportions(
             UNION ALL
 
             SELECT
-                'coding_status' AS stratum_name,
-                CAST(coding_status AS VARCHAR) AS stratum
+                'is_coding_region' AS stratum_name,
+                CAST(is_coding_region AS VARCHAR) AS stratum
             FROM derived
 
             UNION ALL
@@ -327,29 +206,96 @@ def stratum_proportions(
                 'taxonomy_domain' AS stratum_name,
                 CAST(taxonomy_domain AS VARCHAR) AS stratum
             FROM derived
+        ),
+
+        counts AS (
+            SELECT
+                stratum_name,
+                stratum,
+                COUNT(*) AS n
+            FROM strata
+            GROUP BY stratum_name, stratum
         )
-        GROUP BY
+
+        SELECT
             stratum_name,
-            stratum
-        ORDER BY
-            stratum_name,
-            stratum
+            stratum,
+            n,
+            n * 1.0
+                / SUM(n) OVER (PARTITION BY stratum_name)
+                AS proportion
+        FROM counts
+        ORDER BY stratum_name, stratum
     """
 
-    df = catalog.query(sql)
 
-    result: dict[str, dict[Any, float]] = {}
+def stratum_proportions(
+    catalog: PipelineCatalog,
+    *,
+    node_id: str,
+) -> dict[str, dict[str, float]]:
+    """Return independent proportions for all declared sampling strata."""
 
-    for field in SAMPLING_STRATA:
+    df = catalog.query(
+        _independent_stratum_proportions_sql(
+            table=_table(node_id),
+        )
+    )
+
+    result: dict[str, dict[str, float]] = {}
+
+    for field in (
+        "length_bucket",
+        "is_coding_region",
+        "strand",
+        "taxonomy_domain",
+    ):
         subset = df[df["stratum_name"] == field]
 
-        result[field] = (
-            subset
-            .set_index("stratum")["proportion"]
-            .to_dict()
-        )
+        result[field] = {
+            str(key): float(value)
+            for key, value in zip(
+                subset["stratum"],
+                subset["proportion"],
+            )
+        }
 
     return result
+
+
+def sampling_stratum_counts(
+    catalog: PipelineCatalog,
+    *,
+    node_id: str,
+) -> Any:
+    """Return joint counts across the four sampling dimensions."""
+
+    table = _table(node_id)
+
+    return catalog.query(
+        f"""
+        WITH derived AS (
+            {sampling_dimensions_sql(table=table)}
+        )
+        SELECT
+            length_bucket,
+            is_coding_region,
+            strand,
+            taxonomy_domain,
+            COUNT(*) AS n
+        FROM derived
+        GROUP BY
+            length_bucket,
+            is_coding_region,
+            strand,
+            taxonomy_domain
+        ORDER BY
+            length_bucket,
+            is_coding_region,
+            strand,
+            taxonomy_domain
+        """
+    )
 
 
 # ============================================================================
@@ -359,7 +305,7 @@ def stratum_proportions(
 
 @dataclass(frozen=True)
 class EdgeCheck:
-    """Result of a declared lineage-edge consistency check."""
+    """Result of one lineage-edge consistency check."""
 
     edge: str
     expected: dict[str, Any]
@@ -376,28 +322,29 @@ class EdgeCheck:
 def pretraining_split_to_cpu_enriched(
     catalog: PipelineCatalog,
     *,
-    pretraining_split_row_count: int = 46_300_000,
-    expected_fraction: float = 0.70,
+    pretraining_split_row_count: int = PRETRAINING_SPLIT_ROW_COUNT,
+    expected_fraction: float = CPU_ENRICHED_EXPECTED_FRACTION,
 ) -> EdgeCheck:
-    """Validate CPU enrichment coverage of the pretraining split.
+    """Validate CPU-enriched coverage of the pretraining split.
 
-    The ~46.3M source population is the pretraining split, not the
-    complete pretraining corpus.
+    The 46.3M-row source is the pretraining split. The expected
+    cpu_enriched population is approximately 70% of that split.
 
-    The expected CPU-enriched population is ~70% of that split.
+    The 75% corpus-to-pretraining-split relationship is a separate
+    lineage edge and is not measured by this catalog function.
     """
 
-    split_rows = catalog.query(
+    df = catalog.query(
         f"""
         SELECT COUNT(*) AS n
         FROM {_table("cpu_enriched")}
         """
-    )["n"].iloc[0]
+    )
 
-    split_rows = int(split_rows)
+    cpu_rows = int(df["n"].iloc[0])
 
     observed_fraction = (
-        split_rows / pretraining_split_row_count
+        cpu_rows / pretraining_split_row_count
         if pretraining_split_row_count
         else None
     )
@@ -411,7 +358,7 @@ def pretraining_split_to_cpu_enriched(
         },
         observed={
             "pretraining_split_row_count": pretraining_split_row_count,
-            "cpu_enriched_row_count": split_rows,
+            "cpu_enriched_row_count": cpu_rows,
             "observed_fraction": observed_fraction,
         },
     )
@@ -420,13 +367,13 @@ def pretraining_split_to_cpu_enriched(
 def sampling_proportion_drift(
     catalog: PipelineCatalog,
 ) -> EdgeCheck:
-    """Compare declared sampling strata before and after sampling.
+    """Compare CPU-enriched and sampled proportions.
 
-    The intended assertion is that the sampled CPU population preserves
-    the CPU-enriched distribution according to the four sampling strata.
+    This reproduces the conceptual representativeness check in
+    sampling.py, but against the currently cataloged datasets.
 
-    This is different from asserting that deduplication alone preserved
-    distributions.
+    Unlike sampling.py's in-run check, this compares the published
+    cpu_enriched and sampled_cpu artifacts.
     """
 
     cpu = stratum_proportions(
@@ -441,35 +388,48 @@ def sampling_proportion_drift(
 
     drift: dict[str, float | None] = {}
 
-    for field in SAMPLING_STRATA:
+    for field in (
+        "length_bucket",
+        "is_coding_region",
+        "strand",
+        "taxonomy_domain",
+    ):
         cpu_dist = cpu[field]
         sampled_dist = sampled[field]
 
         keys = set(cpu_dist) | set(sampled_dist)
 
-        if not keys:
-            drift[field] = None
-            continue
-
-        drift[field] = max(
-            abs(
-                cpu_dist.get(key, 0.0)
-                - sampled_dist.get(key, 0.0)
+        drift[field] = (
+            max(
+                abs(
+                    cpu_dist.get(key, 0.0)
+                    - sampled_dist.get(key, 0.0)
+                )
+                for key in keys
             )
-            for key in keys
+            if keys
+            else None
         )
 
+    warning_fields = [
+        field
+        for field, value in drift.items()
+        if value is not None
+        and value * 100.0 > SAMPLING_DRIFT_WARNING_THRESHOLD_PCT
+    ]
+
     return EdgeCheck(
-        edge="cpu_enriched_to_sampled_cpu",
+        edge="cpu_enriched_to_sampled_cpu_sampling",
         expected={
-            "method": (
-                "deterministic per-row hash + "
-                "proportional stratified sampling"
+            "method": "deterministic_per_row_hash",
+            "sampling_strata": list(SAMPLING_STRATIFICATION_VARIABLES),
+            "drift_warning_threshold_pct": (
+                SAMPLING_DRIFT_WARNING_THRESHOLD_PCT
             ),
-            "strata": list(SAMPLING_STRATA),
         },
         observed={
             "max_absolute_proportion_drift": drift,
+            "warning_fields": warning_fields,
             "cpu": cpu,
             "sampled": sampled,
         },
@@ -481,6 +441,7 @@ def row_count_relationship(
     *,
     upstream: str,
     downstream: str,
+    expected_relationship: str = "downstream <= upstream",
 ) -> EdgeCheck:
     """Compare upstream/downstream row counts."""
 
@@ -505,10 +466,7 @@ def row_count_relationship(
     return EdgeCheck(
         edge=f"{upstream}_to_{downstream}",
         expected={
-            "relationship": (
-                "downstream <= upstream "
-                "under sampling/token-budget selection"
-            ),
+            "relationship": expected_relationship,
         },
         observed={
             "upstream_n": upstream_n,
@@ -534,7 +492,7 @@ def fanout_consistency(
         "embeddings",
     ),
 ) -> EdgeCheck:
-    """Check that the two GPU output datasets have matching row counts."""
+    """Check that GPU-output row counts agree."""
 
     counts: dict[str, int] = {}
 
@@ -545,7 +503,6 @@ def fanout_consistency(
             FROM {_table(child)}
             """
         )
-
         counts[child] = int(df["n"].iloc[0])
 
     match = len(set(counts.values())) == 1
@@ -570,37 +527,31 @@ def fanout_consistency(
 def run_phase1_checks(
     catalog: PipelineCatalog,
 ) -> dict[str, Any]:
-    """Run the complete Phase 1 lineage-validation suite."""
+    """Run the Phase 1 lineage-validation suite."""
 
-    checks: list[EdgeCheck] = []
-
-    checks.append(
-        pretraining_split_to_cpu_enriched(catalog)
-    )
-
-    checks.append(
-        sampling_proportion_drift(catalog)
-    )
-
-    checks.append(
+    checks: list[EdgeCheck] = [
+        pretraining_split_to_cpu_enriched(catalog),
+        sampling_proportion_drift(catalog),
         row_count_relationship(
             catalog,
             upstream="cpu_enriched",
             downstream="sampled_cpu",
-        )
-    )
-
-    checks.append(
+            expected_relationship=(
+                "sampled CPU population <= CPU-enriched population "
+                "under deterministic sampling"
+            ),
+        ),
         row_count_relationship(
             catalog,
             upstream="sampled_cpu",
             downstream="tokenized",
-        )
-    )
-
-    checks.append(
-        fanout_consistency(catalog)
-    )
+            expected_relationship=(
+                "tokenized population <= sampled CPU population "
+                "under downstream processing/selection"
+            ),
+        ),
+        fanout_consistency(catalog),
+    ]
 
     return {
         check.edge: check.to_dict()
@@ -609,7 +560,7 @@ def run_phase1_checks(
 
 
 # ============================================================================
-# Phase 2+ — feature statistics
+# Phase 2+ — reusable feature statistics
 # ============================================================================
 
 
@@ -620,7 +571,7 @@ def feature_statistics(
     numeric_fields: tuple[str, ...],
     group_by: str | None = None,
 ) -> Any:
-    """Compute reusable numeric feature statistics."""
+    """Compute AVG/MIN/MAX/STDDEV for numeric fields."""
 
     aggs = ", ".join(
         (

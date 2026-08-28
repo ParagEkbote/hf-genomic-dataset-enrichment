@@ -17,84 +17,66 @@ evaluation):
 The pretraining corpus / pretraining split remain streaming inputs and
 are intentionally not cataloged here.
 
-Design principles
+Lineage semantics
 -----------------
 
-1. Shared access layer
-   Pipeline-native analytic reads go through PipelineCatalog rather than
-   independently fetching the same HF datasets from multiple modules.
+    pretraining_split
+        -> cpu_enriched
+        -> sampled_cpu
+        -> tokenized
+        -> {likelihood_stats, embeddings}
 
-2. Query pushdown
-   Repeated aggregation and distribution queries should use query(), which
-   exposes the Faceberg catalog through DuckDB.
+`sampled_cpu` is the stratified CPU-enriched population used as the GPU
+input corpus. Its published HF artifact is named
+`carbon-pilot-corpus-dedup`, but the lineage operation represented by this
+node is deterministic per-row-hash sampling with stratum
+representativeness validation.
 
-3. Local vs remote catalog
-   PipelineCatalog.local() is used for development/verification.
-   PipelineCatalog.remote() is used for the published, shareable catalog.
-
-4. Live provenance
-   describe() obtains schema and location information directly from the
-   published Iceberg table rather than maintaining duplicate schema
-   constants.
-
-5. Lineage semantics
-   sampled_cpu represents the stratified CPU-enriched population used as
-   the GPU input corpus. Its source artifact is currently published as
-   AINovice2005/carbon-pilot-corpus-dedup.
-
-   The name of that HF artifact reflects its construction history, but
-   the lineage operation represented here is stratified corpus sampling,
-   not generic deduplication.
-
-6. Streaming boundary
-   Sequential full-pass transforms such as CPU/GPU enrichment should
-   continue to use IterableDataset streaming. This module is the
-   analytic/verification access path.
+The physical biological schema is preserved. Sampling dimensions already
+materialized by CPU enrichment are not renamed or recomputed here.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, cast,  TypedDict
 
 try:
-    from faceberg import LocalCatalog, catalog as _remote_catalog_factory
+    from faceberg import LocalCatalog, catalog as _catalog_factory
+    import faceberg
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "faceberg is required: pip install faceberg"
     ) from exc
 
-
+_LocalCatalog = cast(Any, faceberg.LocalCatalog)
+_catalog_factory = cast(Any, faceberg.catalog)
 # ============================================================================
 # Pipeline table registry
 # ============================================================================
 
-# Canonical mapping of pipeline node id -> table metadata.
-#
-# pretraining_corpus / pretraining_split are intentionally absent:
-# they are sequential streaming inputs rather than repeated analytic
-# query targets.
+class PipelineTableSpec(TypedDict):
+    table: str
+    repo: str
+    config: str | None
 
-PIPELINE_TABLES: dict[str, dict[str, str | None]] = {
+PIPELINE_TABLES: dict[str, PipelineTableSpec] = {
     "cpu_enriched": {
         "table": "carbon.cpu_enriched_sequences",
         "repo": "AINovice2005/carbon-cpu-enriched-sequences",
         "config": None,
     },
     "sampled_cpu": {
-        # This is the stratified CPU-enriched population used as the
-        # GPU input corpus.
-        #
-        # The public artifact is named pilot_corpus_dedup, reflecting
-        # its construction history. The lineage operation represented
-        # by this node is stratified corpus sampling.
+        # Stratified CPU-enriched population used as the GPU input corpus.
+        # The HF artifact name contains "dedup", but the lineage edge is
+        # deterministic per-row-hash sampling with representativeness
+        # validation.
         "table": "carbon.pilot_corpus_dedup",
         "repo": "AINovice2005/carbon-pilot-corpus-dedup",
         "config": None,
     },
     "tokenized": {
-        # Tokenized / GPU-input population produced from sampled_cpu.
         "table": "carbon.tokenized_corpus",
         "repo": "AINovice2005/carbon-tokenized-corpus",
         "config": None,
@@ -110,6 +92,30 @@ PIPELINE_TABLES: dict[str, dict[str, str | None]] = {
         "config": None,
     },
 }
+
+
+# ============================================================================
+# Sampling metadata
+# ============================================================================
+
+SAMPLING_METHOD = "deterministic_per_row_hash"
+SAMPLING_STRATIFICATION_VARIABLES: tuple[str, ...] = (
+    "sequence_length_bucket_proxy",
+    "is_coding_region",
+    "strand",
+    "taxonomy_domain",
+)
+
+# Exact proxy buckets implemented by sampling.py.
+SAMPLING_LENGTH_PROXY_BUCKETS: tuple[int, ...] = (
+    512,
+    2048,
+    8192,
+    32768,
+    -1,  # >32768; sampling.py uses -1 for the infinity bucket
+)
+
+SAMPLING_DRIFT_WARNING_THRESHOLD_PCT = 2.0
 
 
 # ============================================================================
@@ -143,8 +149,8 @@ class TableDescription:
 class PipelineCatalog:
     """Thin wrapper over the Faceberg catalog.
 
-    Use local() during development and verification, and remote() for
-    the published HF Space-backed catalog.
+    Use local() during development and verification, and remote() for the
+    published HF Space-backed catalog.
     """
 
     def __init__(self, cat: Any, *, mode: str, uri: str) -> None:
@@ -162,12 +168,7 @@ class PipelineCatalog:
 
         uri = f"file://{path}"
         cat = LocalCatalog(name="carbon", uri=uri)
-
-        return cls(
-            cat,
-            mode="local",
-            uri=uri,
-        )
+        return cls(cat, mode="local", uri=uri)
 
     @classmethod
     def remote(
@@ -177,21 +178,12 @@ class PipelineCatalog:
         hf_token: str | None = None,
     ) -> "PipelineCatalog":
         """Connect to the published HF Space-backed catalog."""
-
-        token = hf_token or os.environ.get("HF_TOKEN")
-
-        cat = _remote_catalog_factory(
+        cat = _catalog_factory(
             catalog_id,
-            hf_token=token,
+            hf_token=hf_token or os.environ.get("HF_TOKEN"),
         )
 
-        uri = f"https://{catalog_id.replace('/', '-')}.hf.space"
-
-        return cls(
-            cat,
-            mode="remote",
-            uri=uri,
-        )
+        return cls(cat, mode="remote",uri=catalog_id,)
 
     # ------------------------------------------------------------------
     # Catalog lifecycle
@@ -201,11 +193,7 @@ class PipelineCatalog:
         """Initialize the catalog and register missing pipeline tables."""
 
         self._cat.init()
-
-        existing = {
-            str(t)
-            for t in self._cat.list_tables("carbon")
-        }
+        existing = {str(t) for t in self._cat.list_tables("carbon")}
 
         for node_id, spec in PIPELINE_TABLES.items():
             if spec["table"] not in existing:
@@ -223,10 +211,7 @@ class PipelineCatalog:
                 raise KeyError(
                     f"{node_id!r} is not a catalog-managed table"
                 )
-
-            self._cat.sync_dataset(
-                PIPELINE_TABLES[node_id]["table"]
-            )
+            self._cat.sync_dataset(PIPELINE_TABLES[node_id]["table"])
             return
 
         self._cat.sync_datasets()
@@ -271,7 +256,6 @@ class PipelineCatalog:
         """Unfiltered scan, optionally column-pruned and row-limited."""
 
         table = self.load_table(node_id)
-
         kwargs: dict[str, Any] = {}
 
         if columns is not None:
@@ -290,16 +274,11 @@ class PipelineCatalog:
         value: Any,
         columns: Iterable[str] | None = None,
     ) -> Any:
-        """Row-filtered scan for one field/value pair.
-
-        This uses Iceberg predicate pushdown. Only filters on actual
-        partition fields receive Iceberg file-level partition pruning.
-        """
+        """Row-filtered scan for one field/value pair."""
 
         from pyiceberg.expressions import EqualTo
 
         table = self.load_table(node_id)
-
         kwargs: dict[str, Any] = {
             "row_filter": EqualTo(field, value),
         }
@@ -339,19 +318,15 @@ class PipelineCatalog:
         SQL should reference catalog tables as:
 
             cat.carbon.<table>
-
-        DuckDB performs predicate and aggregation pushdown into the
-        underlying Parquet data where possible.
         """
 
-        import duckdb as _duckdb
+        import duckdb
 
-        conn = _duckdb.connect()
+        conn = cast(Any, duckdb).connect()
 
         try:
             conn.execute("INSTALL iceberg; LOAD iceberg")
             conn.execute(self._attach_stmt(alias="cat"))
-
             return conn.execute(sql).fetchdf()
         finally:
             conn.close()
@@ -359,16 +334,12 @@ class PipelineCatalog:
     def _attach_stmt(self, alias: str = "cat") -> str:
         if self.mode == "local":
             path = self.uri.replace("file://", "")
-
             return (
                 f"ATTACH '{path}' AS {alias} "
                 "(TYPE ICEBERG, AUTHORIZATION_TYPE 'none')"
             )
 
-        return (
-            f"ATTACH '{self.uri}' AS {alias} "
-            "(TYPE ICEBERG)"
-        )
+        return f"ATTACH '{self.uri}' AS {alias} (TYPE ICEBERG)"
 
     # ------------------------------------------------------------------
     # Schema / metadata
@@ -378,7 +349,6 @@ class PipelineCatalog:
         """Return live schema and partition metadata."""
 
         table = self.load_table(node_id)
-
         iceberg_schema = table.schema()
 
         schema = {
@@ -387,10 +357,7 @@ class PipelineCatalog:
         }
 
         partition_fields = (
-            tuple(
-                field.name
-                for field in table.spec().fields
-            )
+            tuple(field.name for field in table.spec().fields)
             if table.spec().fields
             else ()
         )
@@ -418,8 +385,7 @@ class PipelineCatalog:
         """Return the exact DuckDB statements needed to attach the catalog."""
 
         return (
-            "INSTALL iceberg; "
-            "LOAD iceberg;\n"
+            "INSTALL iceberg; LOAD iceberg;\n"
             f"{self._attach_stmt(alias)};"
         )
 
