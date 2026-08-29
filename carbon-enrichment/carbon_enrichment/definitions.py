@@ -36,9 +36,6 @@ import dagster as dg
 from carbon_enrichment.assets.cpu.streaming import (
     carbon_cpu_enriched_sequences,
 )
-from carbon_enrichment.assets.derived.likelihood_embedding_features import (
-    carbon_likelihood_summary,
-)
 from carbon_enrichment.assets.gpu.embeddings import (
     carbon_gpu_enrichment,
 )
@@ -67,10 +64,6 @@ GPU_PIPELINE_ASSETS = [
     carbon_pilot_corpus,
     carbon_tokenized_corpus,
     carbon_gpu_enrichment,
-]
-
-ANALYSIS_ASSETS = [
-    carbon_likelihood_summary,
 ]
 
 
@@ -118,14 +111,6 @@ carbon_gpu_job = dg.define_asset_job(
     executor_def=dg.in_process_executor,
 )
 
-# Post-processing analytics & distribution summaries
-carbon_analysis_job = dg.define_asset_job(
-    name="carbon_analysis_job",
-    selection=dg.AssetSelection.keys("carbon_likelihood_summary"),
-    executor_def=dg.in_process_executor,
-)
-
-
 # ============================================================================
 # Definitions
 # ============================================================================
@@ -134,14 +119,12 @@ defs = dg.Definitions(
     assets=[
         *CPU_ASSETS,
         *GPU_PIPELINE_ASSETS,
-        *ANALYSIS_ASSETS,
     ],
     jobs=[
         carbon_cpu_job,
         carbon_tokenize_job,
         carbon_inference_job,
         carbon_gpu_job,
-        carbon_analysis_job,
     ],
     resources={
         "hf_resource": create_huggingface_resource(),

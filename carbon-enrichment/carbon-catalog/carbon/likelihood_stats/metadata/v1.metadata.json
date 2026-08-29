@@ -1,0 +1,150 @@
+{
+  "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/likelihood_stats",
+  "table-uuid": "690dc42d-a379-4048-a5ee-671cd4950169",
+  "last-updated-ms": 3649764426,
+  "last-column-id": 11,
+  "schemas": [
+    {
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "split",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 2,
+          "name": "record_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 3,
+          "name": "start",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 4,
+          "name": "end",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 5,
+          "name": "mean_log_prob",
+          "type": "float",
+          "required": false
+        },
+        {
+          "id": 6,
+          "name": "sum_log_prob",
+          "type": "float",
+          "required": false
+        },
+        {
+          "id": 7,
+          "name": "perplexity",
+          "type": "float",
+          "required": false
+        },
+        {
+          "id": 8,
+          "name": "supervised_position_count",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 9,
+          "name": "min_token_logprob",
+          "type": "float",
+          "required": false
+        },
+        {
+          "id": 10,
+          "name": "argmin_position",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 11,
+          "name": "per_token_logprob_std",
+          "type": "float",
+          "required": false
+        }
+      ],
+      "schema-id": 0,
+      "identifier-field-ids": []
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "source-id": 1,
+          "field-id": 1000,
+          "transform": "identity",
+          "name": "split"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 1000,
+  "properties": {
+    "write.parquet.compression-codec": "snappy",
+    "write.py-location-provider.impl": "faceberg.catalog.HfLocationProvider",
+    "write.data.path": "hf://datasets/AINovice2005/carbon-likelihood-stats",
+    "hf.dataset.repo": "AINovice2005/carbon-likelihood-stats",
+    "hf.dataset.config": "default",
+    "hf.dataset.revision": "38b88be7c83f9550c0791ca2014438be0230c42e",
+    "hf.write.pattern": "{split}-{uuid}-iceberg.parquet",
+    "hf.write.split": "train",
+    "schema.name-mapping.default": "[{\"names\":[\"split\"],\"field-id\":1},{\"names\":[\"record_id\"],\"field-id\":2},{\"names\":[\"start\"],\"field-id\":3},{\"names\":[\"end\"],\"field-id\":4},{\"names\":[\"mean_log_prob\"],\"field-id\":5},{\"names\":[\"sum_log_prob\"],\"field-id\":6},{\"names\":[\"perplexity\"],\"field-id\":7},{\"names\":[\"supervised_position_count\"],\"field-id\":8},{\"names\":[\"min_token_logprob\"],\"field-id\":9},{\"names\":[\"argmin_position\"],\"field-id\":10},{\"names\":[\"per_token_logprob_std\"],\"field-id\":11}]"
+  },
+  "current-snapshot-id": 1,
+  "snapshots": [
+    {
+      "snapshot-id": 1,
+      "sequence-number": 0,
+      "timestamp-ms": 3649764426,
+      "manifest-list": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/likelihood_stats/metadata/snap-1-0-cae13856-abe7-4850-bd80-86d39ee6f851.avro",
+      "summary": {
+        "operation": "append",
+        "added-files-size": "22389845",
+        "added-data-files": "146",
+        "added-records": "251427",
+        "changed-partition-count": "1",
+        "total-data-files": "146",
+        "total-delete-files": "0",
+        "total-records": "251427",
+        "total-files-size": "22389845",
+        "total-position-deletes": "0",
+        "total-equality-deletes": "0"
+      },
+      "schema-id": 0
+    }
+  ],
+  "snapshot-log": [],
+  "metadata-log": [],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "main": {
+      "snapshot-id": 1,
+      "type": "branch"
+    }
+  },
+  "statistics": [],
+  "partition-statistics": [],
+  "format-version": 2,
+  "last-sequence-number": 0
+}

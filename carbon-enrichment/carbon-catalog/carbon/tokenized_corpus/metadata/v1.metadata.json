@@ -1,0 +1,136 @@
+{
+  "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/tokenized_corpus",
+  "table-uuid": "e3301254-e55d-4453-8807-ff7a29e02bdb",
+  "last-updated-ms": 901925909,
+  "last-column-id": 9,
+  "schemas": [
+    {
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "split",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 2,
+          "name": "record_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 3,
+          "name": "start",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 4,
+          "name": "end",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 5,
+          "name": "token_ids",
+          "type": {
+            "type": "list",
+            "element-id": 8,
+            "element": "int",
+            "element-required": false
+          },
+          "required": false
+        },
+        {
+          "id": 6,
+          "name": "token_mask",
+          "type": {
+            "type": "list",
+            "element-id": 9,
+            "element": "int",
+            "element-required": false
+          },
+          "required": false
+        },
+        {
+          "id": 7,
+          "name": "token_length",
+          "type": "int",
+          "required": false
+        }
+      ],
+      "schema-id": 0,
+      "identifier-field-ids": []
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "source-id": 1,
+          "field-id": 1000,
+          "transform": "identity",
+          "name": "split"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 1000,
+  "properties": {
+    "write.parquet.compression-codec": "snappy",
+    "write.py-location-provider.impl": "faceberg.catalog.HfLocationProvider",
+    "write.data.path": "hf://datasets/AINovice2005/carbon-tokenized-corpus",
+    "hf.dataset.repo": "AINovice2005/carbon-tokenized-corpus",
+    "hf.dataset.config": "default",
+    "hf.dataset.revision": "d9f59ee1693ac4ee7263e86a9ddb3474226923d7",
+    "hf.write.pattern": "{split}-{uuid}-iceberg.parquet",
+    "hf.write.split": "train",
+    "schema.name-mapping.default": "[{\"names\":[\"split\"],\"field-id\":1},{\"names\":[\"record_id\"],\"field-id\":2},{\"names\":[\"start\"],\"field-id\":3},{\"names\":[\"end\"],\"field-id\":4},{\"names\":[\"token_ids\"],\"field-id\":5,\"fields\":[{\"names\":[\"element\"],\"field-id\":8}]},{\"names\":[\"token_mask\"],\"field-id\":6,\"fields\":[{\"names\":[\"element\"],\"field-id\":9}]},{\"names\":[\"token_length\"],\"field-id\":7}]"
+  },
+  "current-snapshot-id": 1,
+  "snapshots": [
+    {
+      "snapshot-id": 1,
+      "sequence-number": 0,
+      "timestamp-ms": 901925909,
+      "manifest-list": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/tokenized_corpus/metadata/snap-1-0-d0cd6438-835b-4a9b-aa4f-cfda21571e8c.avro",
+      "summary": {
+        "operation": "append",
+        "added-files-size": "5111767778",
+        "added-data-files": "308",
+        "added-records": "3070722",
+        "changed-partition-count": "1",
+        "total-data-files": "308",
+        "total-delete-files": "0",
+        "total-records": "3070722",
+        "total-files-size": "5111767778",
+        "total-position-deletes": "0",
+        "total-equality-deletes": "0"
+      },
+      "schema-id": 0
+    }
+  ],
+  "snapshot-log": [],
+  "metadata-log": [],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "main": {
+      "snapshot-id": 1,
+      "type": "branch"
+    }
+  },
+  "statistics": [],
+  "partition-statistics": [],
+  "format-version": 2,
+  "last-sequence-number": 0
+}

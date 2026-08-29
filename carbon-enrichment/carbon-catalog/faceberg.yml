@@ -1,0 +1,21 @@
+carbon:
+  cpu_enriched_sequences:
+    type: dataset
+    repo: AINovice2005/carbon-cpu-enriched-sequences
+    config: null
+  pilot_corpus_dedup:
+    type: dataset
+    repo: AINovice2005/carbon-pilot-corpus-dedup
+    config: null
+  tokenized_corpus:
+    type: dataset
+    repo: AINovice2005/carbon-tokenized-corpus
+    config: null
+  likelihood_stats:
+    type: dataset
+    repo: AINovice2005/carbon-likelihood-stats
+    config: null
+  embeddings:
+    type: dataset
+    repo: AINovice2005/carbon-embeddings
+    config: null

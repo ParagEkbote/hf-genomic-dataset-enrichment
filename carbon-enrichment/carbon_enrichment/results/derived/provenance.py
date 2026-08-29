@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-
 
 # ============================================================================
 # Lineage nodes
@@ -84,7 +83,6 @@ def build_carbon_provenance(
                 "split": "eukaryote_generator/train",
             },
         ),
-
         ProvenanceNode(
             id="pretraining_split",
             name="Pretraining split",
@@ -94,37 +92,31 @@ def build_carbon_provenance(
                 "selection": "first_75_percent_by_source_order",
             },
         ),
-
         ProvenanceNode(
             id="cpu_enriched",
             name="CPU-enriched sequences",
             artifact_type="cpu_enriched",
         ),
-
         ProvenanceNode(
             id="sampled_cpu",
             name="Sampled CPU-enriched population",
             artifact_type="sampled_population",
         ),
-
         ProvenanceNode(
             id="tokenized",
             name="Tokenized corpus",
             artifact_type="tokenized_dataset",
         ),
-
         ProvenanceNode(
             id="gpu_enriched",
             name="GPU-enriched sequences",
             artifact_type="gpu_enriched",
         ),
-
         ProvenanceNode(
             id="likelihood_stats",
             name="Likelihood statistics",
             artifact_type="derived_statistics",
         ),
-
         ProvenanceNode(
             id="embeddings",
             name="Embeddings",
@@ -148,7 +140,6 @@ def build_carbon_provenance(
                 "selection": "first_75_percent_by_source_order",
             },
         ),
-
         ProvenanceOperation(
             id="cpu_enrichment",
             name="CPU enrichment",
@@ -157,7 +148,6 @@ def build_carbon_provenance(
             execution_mode="dagster_asset",
             purpose="Generate CPU-derived sequence features.",
         ),
-
         ProvenanceOperation(
             id="cpu_sampling",
             name="Stratified corpus sampling",
@@ -176,7 +166,6 @@ def build_carbon_provenance(
                 ),
             },
         ),
-
         ProvenanceOperation(
             id="tokenization",
             name="Tokenization",
@@ -185,7 +174,6 @@ def build_carbon_provenance(
             execution_mode="dagster_asset",
             purpose="Convert sampled sequences into model-ready tokenized input.",
         ),
-
         ProvenanceOperation(
             id="gpu_processing",
             name="Token-budgeted GPU processing",
@@ -197,7 +185,6 @@ def build_carbon_provenance(
                 "within the configured token budget."
             ),
         ),
-
         ProvenanceOperation(
             id="likelihood_generation",
             name="Likelihood statistics",
@@ -206,7 +193,6 @@ def build_carbon_provenance(
             execution_mode="dagster_asset",
             purpose="Produce per-sequence model likelihood statistics.",
         ),
-
         ProvenanceOperation(
             id="embedding_generation",
             name="Embedding generation",
@@ -220,7 +206,7 @@ def build_carbon_provenance(
     return PipelineProvenance(
         pipeline_name="carbon-enrichment",
         pipeline_version=pipeline_version,
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=datetime.now(UTC).isoformat(),
         nodes=nodes,
         operations=operations,
     )

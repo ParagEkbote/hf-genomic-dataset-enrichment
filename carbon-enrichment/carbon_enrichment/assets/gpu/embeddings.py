@@ -2,11 +2,11 @@ import gc
 import json
 import logging
 import os
-from pathlib import Path
 import time
-from typing import Any
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 # Safeguard against VRAM virtual address fragmentation during high-occupancy (>70GB) runs
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -55,13 +55,55 @@ DEFAULT_LOGIT_CHUNK_SIZE = 16
 # ============================================================================
 
 CARBON_3B_A100_HIGH_OCCUPANCY_CONFIGS: list[BucketBatchConfig] = [
-    BucketBatchConfig(bucket_max_tokens=512,   batch_size=160, dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=True),
-    BucketBatchConfig(bucket_max_tokens=1024,  batch_size=80,  dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=True),
-    BucketBatchConfig(bucket_max_tokens=2048,  batch_size=40,  dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=True),
-    BucketBatchConfig(bucket_max_tokens=4096,  batch_size=20,  dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=True),
-    BucketBatchConfig(bucket_max_tokens=8192,  batch_size=8,   dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=True),
-    BucketBatchConfig(bucket_max_tokens=16384, batch_size=2,   dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=False),
-    BucketBatchConfig(bucket_max_tokens=32768, batch_size=1,   dtype="bfloat16", attn_backend="kernels-community/flash-attn2", compile_enabled=False),
+    BucketBatchConfig(
+        bucket_max_tokens=512,
+        batch_size=160,
+        dtype="bfloat16",
+        attn_backend="kernels-community/flash-attn2",
+        compile_enabled=True,
+    ),
+    BucketBatchConfig(
+        bucket_max_tokens=1024,
+        batch_size=80,
+        dtype="bfloat16",
+        attn_backend="kernels-community/flash-attn2",
+        compile_enabled=True,
+    ),
+    BucketBatchConfig(
+        bucket_max_tokens=2048,
+        batch_size=40,
+        dtype="bfloat16",
+        attn_backend="kernels-community/flash-attn2",
+        compile_enabled=True,
+    ),
+    BucketBatchConfig(
+        bucket_max_tokens=4096,
+        batch_size=20,
+        dtype="bfloat16",
+        attn_backend="kernels-community/flash-attn2",
+        compile_enabled=True,
+    ),
+    BucketBatchConfig(
+        bucket_max_tokens=8192,
+        batch_size=8,
+        dtype="bfloat16",
+        attn_backend="kernels-community/flash-attn2",
+        compile_enabled=True,
+    ),
+    BucketBatchConfig(
+        bucket_max_tokens=16384,
+        batch_size=2,
+        dtype="bfloat16",
+        attn_backend="kernels-community/flash-attn2",
+        compile_enabled=False,
+    ),
+    BucketBatchConfig(
+        bucket_max_tokens=32768,
+        batch_size=1,
+        dtype="bfloat16",
+        attn_backend="kernels-community/flash-attn2",
+        compile_enabled=False,
+    ),
 ]
 
 
@@ -173,11 +215,7 @@ def _validate_join_key(
     output_name: str,
 ) -> None:
     """Ensure every GPU-derived output preserves the immutable join key."""
-    missing = [
-        column
-        for column in GPU_JOIN_KEY
-        if column not in batch.schema.names
-    ]
+    missing = [column for column in GPU_JOIN_KEY if column not in batch.schema.names]
     if missing:
         raise ValueError(
             f"{output_name} is missing required GPU join columns: {missing!r}"
@@ -388,6 +426,7 @@ def _resolve_base_model(model: Any) -> Any:
 # (logit_chunk_size, T, V) regardless of the outer batch size.
 # ============================================================================
 
+
 def _resolve_logit_chunk_size(
     bucket_max_tokens: int,
     base_chunk: int = DEFAULT_LOGIT_CHUNK_SIZE,
@@ -591,12 +630,8 @@ def _run_bucket_batch_with_oom_retry(
             quarantined_record_ids.append(
                 record_batch.column("record_id")[offset].as_py()
             )
-            quarantined_starts.append(
-                record_batch.column("start")[offset].as_py()
-            )
-            quarantined_ends.append(
-                record_batch.column("end")[offset].as_py()
-            )
+            quarantined_starts.append(record_batch.column("start")[offset].as_py())
+            quarantined_ends.append(record_batch.column("end")[offset].as_py())
             offset += 1
 
     stats.rows_quarantined += len(quarantined_record_ids)
@@ -795,9 +830,7 @@ def iter_tokenized_shard_batches(
     available = parquet_file.schema_arrow.names
     missing = [column for column in required_columns if column not in available]
     if missing:
-        raise ValueError(
-            f"{shard_path} is missing required GPU columns: {missing}"
-        )
+        raise ValueError(f"{shard_path} is missing required GPU columns: {missing}")
 
     for batch in parquet_file.iter_batches(
         batch_size=batch_size,
@@ -913,13 +946,10 @@ def process_gpu_enrichment(
 
                     for bucket_max, bucket_batch in grouped.items():
                         bucket = next(
-                            b for b in buckets
-                            if b.bucket_max_tokens == bucket_max
+                            b for b in buckets if b.bucket_max_tokens == bucket_max
                         )
                         active_model = (
-                            compiled_model
-                            if bucket.compile_enabled
-                            else raw_model
+                            compiled_model if bucket.compile_enabled else raw_model
                         )
 
                         emb_batch, like_batch, quarantine_batch = (
@@ -961,12 +991,8 @@ def process_gpu_enrichment(
             run_rows += completed_shards[shard_name]["rows"]
             shards_committed_this_run += 1
 
-            stats.embedding_shards_written += (
-                emb_writer.shards_written
-            )
-            stats.likelihood_shards_written += (
-                like_writer.shards_written
-            )
+            stats.embedding_shards_written += emb_writer.shards_written
+            stats.likelihood_shards_written += like_writer.shards_written
 
             if context is not None:
                 context.log.info(
@@ -1037,9 +1063,7 @@ def process_gpu_enrichment(
             )
         ),
         "carbon_likelihood_stats": dg.AssetOut(
-            description=(
-                "Per-sequence log-prob/perplexity stats derived from logits."
-            )
+            description=("Per-sequence log-prob/perplexity stats derived from logits.")
         ),
     },
     deps=["carbon_tokenized_corpus"],
@@ -1079,10 +1103,7 @@ def carbon_gpu_enrichment(
     )
 
     if stats.oom_retries_by_bucket:
-        context.log.warning(
-            "OOM retries observed: "
-            f"{stats.oom_retries_by_bucket}"
-        )
+        context.log.warning(f"OOM retries observed: {stats.oom_retries_by_bucket}")
 
     if stats.rows_quarantined:
         context.log.warning(f"{stats.rows_quarantined:,} rows quarantined.")

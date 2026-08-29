@@ -31,7 +31,6 @@ embedding model-specific computation or feature semantics.
 
 from typing import Final
 
-
 # ============================================================================
 # 1. Hugging Face dataset
 # ============================================================================
@@ -228,9 +227,7 @@ GENE_BOUNDARY_PAIRS: Final[tuple[tuple[str, str], ...]] = (
 # 8. Nucleotide alphabet
 # ============================================================================
 
-IUPAC_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset(
-    "ACGTNRYSWKMBDHV-"
-)
+IUPAC_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset("ACGTNRYSWKMBDHV-")
 
 CLEAN_NUCLEOTIDE_CHARS: Final[frozenset[str]] = frozenset("ACGT")
 

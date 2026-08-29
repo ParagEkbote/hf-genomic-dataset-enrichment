@@ -1,0 +1,245 @@
+{
+  "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/cpu_enriched_sequences",
+  "table-uuid": "f34c5cab-e3e8-40e4-994c-57ac0ec860d9",
+  "last-updated-ms": 1082497289,
+  "last-column-id": 27,
+  "schemas": [
+    {
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "split",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 2,
+          "name": "begin_of_sequence",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 3,
+          "name": "end_of_sequence",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 4,
+          "name": "begin_of_gene",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 5,
+          "name": "end_of_gene",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 6,
+          "name": "gene_type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 7,
+          "name": "species_type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 8,
+          "name": "strand",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 9,
+          "name": "sequence",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 10,
+          "name": "molecule_type",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 11,
+          "name": "topology",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 12,
+          "name": "taxonomy",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 13,
+          "name": "record_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 14,
+          "name": "start",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 15,
+          "name": "end",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 16,
+          "name": "gc_content",
+          "type": "double",
+          "required": false
+        },
+        {
+          "id": 17,
+          "name": "gc_skew",
+          "type": "double",
+          "required": false
+        },
+        {
+          "id": 18,
+          "name": "sequence_length",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 19,
+          "name": "gene_length",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 20,
+          "name": "shannon_entropy",
+          "type": "double",
+          "required": false
+        },
+        {
+          "id": 21,
+          "name": "kmer_frequency_vector",
+          "type": {
+            "type": "list",
+            "element-id": 27,
+            "element": "double",
+            "element-required": false
+          },
+          "required": false
+        },
+        {
+          "id": 22,
+          "name": "strand_normalized_sequence",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 23,
+          "name": "taxonomy_domain",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 24,
+          "name": "taxonomy_depth",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 25,
+          "name": "is_coding_region",
+          "type": "boolean",
+          "required": false
+        },
+        {
+          "id": 26,
+          "name": "qc_flag",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "schema-id": 0,
+      "identifier-field-ids": []
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "source-id": 1,
+          "field-id": 1000,
+          "transform": "identity",
+          "name": "split"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 1000,
+  "properties": {
+    "write.parquet.compression-codec": "snappy",
+    "write.py-location-provider.impl": "faceberg.catalog.HfLocationProvider",
+    "write.data.path": "hf://datasets/AINovice2005/carbon-cpu-enriched-sequences",
+    "hf.dataset.repo": "AINovice2005/carbon-cpu-enriched-sequences",
+    "hf.dataset.config": "default",
+    "hf.dataset.revision": "7bd3c051811c75bf53463716a631378340cb1eeb",
+    "hf.write.pattern": "{split}-{uuid}-iceberg.parquet",
+    "hf.write.split": "train",
+    "schema.name-mapping.default": "[{\"names\":[\"split\"],\"field-id\":1},{\"names\":[\"begin_of_sequence\"],\"field-id\":2},{\"names\":[\"end_of_sequence\"],\"field-id\":3},{\"names\":[\"begin_of_gene\"],\"field-id\":4},{\"names\":[\"end_of_gene\"],\"field-id\":5},{\"names\":[\"gene_type\"],\"field-id\":6},{\"names\":[\"species_type\"],\"field-id\":7},{\"names\":[\"strand\"],\"field-id\":8},{\"names\":[\"sequence\"],\"field-id\":9},{\"names\":[\"molecule_type\"],\"field-id\":10},{\"names\":[\"topology\"],\"field-id\":11},{\"names\":[\"taxonomy\"],\"field-id\":12},{\"names\":[\"record_id\"],\"field-id\":13},{\"names\":[\"start\"],\"field-id\":14},{\"names\":[\"end\"],\"field-id\":15},{\"names\":[\"gc_content\"],\"field-id\":16},{\"names\":[\"gc_skew\"],\"field-id\":17},{\"names\":[\"sequence_length\"],\"field-id\":18},{\"names\":[\"gene_length\"],\"field-id\":19},{\"names\":[\"shannon_entropy\"],\"field-id\":20},{\"names\":[\"kmer_frequency_vector\"],\"field-id\":21,\"fields\":[{\"names\":[\"element\"],\"field-id\":27}]},{\"names\":[\"strand_normalized_sequence\"],\"field-id\":22},{\"names\":[\"taxonomy_domain\"],\"field-id\":23},{\"names\":[\"taxonomy_depth\"],\"field-id\":24},{\"names\":[\"is_coding_region\"],\"field-id\":25},{\"names\":[\"qc_flag\"],\"field-id\":26}]"
+  },
+  "current-snapshot-id": 1,
+  "snapshots": [
+    {
+      "snapshot-id": 1,
+      "sequence-number": 0,
+      "timestamp-ms": 1082497289,
+      "manifest-list": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/cpu_enriched_sequences/metadata/snap-1-0-0af5da9c-5a4e-4857-8685-ad0fac016dfc.avro",
+      "summary": {
+        "operation": "append",
+        "added-files-size": "138709627543",
+        "added-data-files": "649",
+        "added-records": "32410000",
+        "changed-partition-count": "1",
+        "total-data-files": "649",
+        "total-delete-files": "0",
+        "total-records": "32410000",
+        "total-files-size": "138709627543",
+        "total-position-deletes": "0",
+        "total-equality-deletes": "0"
+      },
+      "schema-id": 0
+    }
+  ],
+  "snapshot-log": [],
+  "metadata-log": [],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "main": {
+      "snapshot-id": 1,
+      "type": "branch"
+    }
+  },
+  "statistics": [],
+  "partition-statistics": [],
+  "format-version": 2,
+  "last-sequence-number": 0
+}

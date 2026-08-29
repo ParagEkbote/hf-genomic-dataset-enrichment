@@ -1,0 +1,125 @@
+{
+  "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/embeddings",
+  "table-uuid": "4a3387a1-fadf-4204-8d59-c4c149fa47fc",
+  "last-updated-ms": 2576625288,
+  "last-column-id": 7,
+  "schemas": [
+    {
+      "type": "struct",
+      "fields": [
+        {
+          "id": 1,
+          "name": "split",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 2,
+          "name": "record_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "id": 3,
+          "name": "start",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 4,
+          "name": "end",
+          "type": "long",
+          "required": false
+        },
+        {
+          "id": 5,
+          "name": "embedding",
+          "type": {
+            "type": "list",
+            "element-id": 7,
+            "element": "float",
+            "element-required": false
+          },
+          "required": false
+        },
+        {
+          "id": 6,
+          "name": "embedding_norm",
+          "type": "float",
+          "required": false
+        }
+      ],
+      "schema-id": 0,
+      "identifier-field-ids": []
+    }
+  ],
+  "current-schema-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": [
+        {
+          "source-id": 1,
+          "field-id": 1000,
+          "transform": "identity",
+          "name": "split"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 0,
+  "last-partition-id": 1000,
+  "properties": {
+    "write.parquet.compression-codec": "snappy",
+    "write.py-location-provider.impl": "faceberg.catalog.HfLocationProvider",
+    "write.data.path": "hf://datasets/AINovice2005/carbon-embeddings",
+    "hf.dataset.repo": "AINovice2005/carbon-embeddings",
+    "hf.dataset.config": "default",
+    "hf.dataset.revision": "291d7880bdcea75e48b025d86ee66ed6e7ee8562",
+    "hf.write.pattern": "{split}-{uuid}-iceberg.parquet",
+    "hf.write.split": "train",
+    "schema.name-mapping.default": "[{\"names\":[\"split\"],\"field-id\":1},{\"names\":[\"record_id\"],\"field-id\":2},{\"names\":[\"start\"],\"field-id\":3},{\"names\":[\"end\"],\"field-id\":4},{\"names\":[\"embedding\"],\"field-id\":5,\"fields\":[{\"names\":[\"element\"],\"field-id\":7}]},{\"names\":[\"embedding_norm\"],\"field-id\":6}]"
+  },
+  "current-snapshot-id": 1,
+  "snapshots": [
+    {
+      "snapshot-id": 1,
+      "sequence-number": 0,
+      "timestamp-ms": 2576625288,
+      "manifest-list": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/embeddings/metadata/snap-1-0-631201d3-5683-4258-84f4-61a3221da5fd.avro",
+      "summary": {
+        "operation": "append",
+        "added-files-size": "1240571599",
+        "added-data-files": "146",
+        "added-records": "251427",
+        "changed-partition-count": "1",
+        "total-data-files": "146",
+        "total-delete-files": "0",
+        "total-records": "251427",
+        "total-files-size": "1240571599",
+        "total-position-deletes": "0",
+        "total-equality-deletes": "0"
+      },
+      "schema-id": 0
+    }
+  ],
+  "snapshot-log": [],
+  "metadata-log": [],
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "default-sort-order-id": 0,
+  "refs": {
+    "main": {
+      "snapshot-id": 1,
+      "type": "branch"
+    }
+  },
+  "statistics": [],
+  "partition-statistics": [],
+  "format-version": 2,
+  "last-sequence-number": 0
+}

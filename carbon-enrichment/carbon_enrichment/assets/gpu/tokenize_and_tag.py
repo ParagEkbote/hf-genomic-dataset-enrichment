@@ -66,7 +66,6 @@ from carbon_enrichment.schema import (
     TOKENIZED_CORPUS_COLUMNS,
 )
 
-
 # ============================================================================
 # Constants
 # ============================================================================
@@ -85,14 +84,10 @@ DNA_SPECIAL_TOKEN_COUNT = 2
 
 # Maximum number of DNA bases that can be represented without exceeding
 # MAX_NATIVE_CONTEXT_TOKENS, assuming 6-mer tokenization.
-MAX_DNA_BASES = (
-    (MAX_NATIVE_CONTEXT_TOKENS - DNA_SPECIAL_TOKEN_COUNT)
-    * DNA_KMER_SIZE
-)
+MAX_DNA_BASES = (MAX_NATIVE_CONTEXT_TOKENS - DNA_SPECIAL_TOKEN_COUNT) * DNA_KMER_SIZE
 
 # Deterministic DNA-mode correctness probe.
 _DNA_MODE_PROBE_SEQUENCE = "ACGTACGTACGT"
-
 
 
 # ============================================================================
@@ -136,9 +131,7 @@ def merge_tokenization_stats(
         merged.rows_tokenized += result.rows_tokenized
         merged.rows_filtered_qc += result.rows_filtered_qc
         merged.rows_filtered_short += result.rows_filtered_short
-        merged.rows_exceeding_native_context += (
-            result.rows_exceeding_native_context
-        )
+        merged.rows_exceeding_native_context += result.rows_exceeding_native_context
         merged.total_token_count += result.total_token_count
 
         if result.min_token_length is not None:
@@ -182,9 +175,7 @@ def _validate_tokenized_output(batch: pa.RecordBatch) -> None:
         )
 
     missing_identity = [
-        column
-        for column in GPU_JOIN_KEY
-        if column not in batch.schema.names
+        column for column in GPU_JOIN_KEY if column not in batch.schema.names
     ]
 
     if missing_identity:
@@ -218,20 +209,14 @@ def _assert_dna_mode_active(tokenizer: Any) -> None:
             f"expected={DNA_KMER_SIZE}"
         )
 
-    tagged = (
-        f"{DNA_OPEN_TAG}"
-        f"{_DNA_MODE_PROBE_SEQUENCE}"
-        f"{DNA_CLOSE_TAG}"
-    )
+    tagged = f"{DNA_OPEN_TAG}{_DNA_MODE_PROBE_SEQUENCE}{DNA_CLOSE_TAG}"
 
     probe_ids = tokenizer(
         tagged,
         add_special_tokens=False,
     )["input_ids"]
 
-    expected_kmer_count = (
-        len(_DNA_MODE_PROBE_SEQUENCE) // tokenizer.k
-    )
+    expected_kmer_count = len(_DNA_MODE_PROBE_SEQUENCE) // tokenizer.k
     expected_length = expected_kmer_count + DNA_SPECIAL_TOKEN_COUNT
 
     correct_structure = (
@@ -285,9 +270,7 @@ def _normalize_and_truncate_sequences(
             sequence = sequence[:MAX_DNA_BASES]
             rows_truncated += 1
 
-        aligned_length = (
-            len(sequence) // DNA_KMER_SIZE
-        ) * DNA_KMER_SIZE
+        aligned_length = (len(sequence) // DNA_KMER_SIZE) * DNA_KMER_SIZE
 
         if aligned_length == 0:
             keep_values.append(False)
@@ -345,16 +328,11 @@ def _tokenize_batch(
     )
 
     missing_columns = [
-        column
-        for column in required_columns
-        if column not in raw_batch.schema.names
+        column for column in required_columns if column not in raw_batch.schema.names
     ]
 
     if missing_columns:
-        raise ValueError(
-            "Input batch is missing required columns: "
-            f"{missing_columns}"
-        )
+        raise ValueError(f"Input batch is missing required columns: {missing_columns}")
 
     clean_mask = pc.equal(
         raw_batch.column("qc_flag"),
@@ -369,11 +347,13 @@ def _tokenize_batch(
             pa.array([], type=clean_batch.schema.field(column).type)
             for column in GPU_JOIN_KEY
         ]
-        empty_arrays.extend([
-            pa.array([], type=pa.list_(pa.int32())),
-            pa.array([], type=pa.list_(pa.int8())),
-            pa.array([], type=pa.int32()),
-        ])
+        empty_arrays.extend(
+            [
+                pa.array([], type=pa.list_(pa.int32())),
+                pa.array([], type=pa.list_(pa.int8())),
+                pa.array([], type=pa.int32()),
+            ]
+        )
         output_batch = pa.RecordBatch.from_arrays(
             empty_arrays,
             names=list(TOKENIZED_CORPUS_COLUMNS),
@@ -392,20 +372,20 @@ def _tokenize_batch(
     tokenizable_batch = clean_batch.filter(tokenizable_mask)
 
     stats.rows_exceeding_native_context = rows_truncated
-    stats.rows_filtered_short = (
-        clean_batch.num_rows - tokenizable_batch.num_rows
-    )
+    stats.rows_filtered_short = clean_batch.num_rows - tokenizable_batch.num_rows
 
     if tokenizable_batch.num_rows == 0:
         empty_arrays = [
             pa.array([], type=tokenizable_batch.schema.field(column).type)
             for column in GPU_JOIN_KEY
         ]
-        empty_arrays.extend([
-            pa.array([], type=pa.list_(pa.int32())),
-            pa.array([], type=pa.list_(pa.int8())),
-            pa.array([], type=pa.int32()),
-        ])
+        empty_arrays.extend(
+            [
+                pa.array([], type=pa.list_(pa.int32())),
+                pa.array([], type=pa.list_(pa.int8())),
+                pa.array([], type=pa.int32()),
+            ]
+        )
 
         output_batch = pa.RecordBatch.from_arrays(
             empty_arrays,
@@ -422,8 +402,7 @@ def _tokenize_batch(
     end_array = tokenizable_batch.column("end")
 
     tagged_list = [
-        f"{DNA_OPEN_TAG}{sequence}{DNA_CLOSE_TAG}"
-        for sequence in normalized_sequences
+        f"{DNA_OPEN_TAG}{sequence}{DNA_CLOSE_TAG}" for sequence in normalized_sequences
     ]
 
     encoded = tokenizer(
@@ -532,14 +511,11 @@ def iter_cpu_enriched_batches(
 
     input_dir = Path(input_dir)
 
-    shard_paths = sorted(
-        input_dir.glob("shard-*.parquet")
-    )
+    shard_paths = sorted(input_dir.glob("shard-*.parquet"))
 
     if not shard_paths:
         raise FileNotFoundError(
-            "No CPU-enriched/pilot Parquet shards found in "
-            f"{input_dir}"
+            f"No CPU-enriched/pilot Parquet shards found in {input_dir}"
         )
 
     required_columns = [
@@ -554,9 +530,7 @@ def iter_cpu_enriched_batches(
         available_columns = parquet_file.schema_arrow.names
 
         missing_columns = [
-            column
-            for column in required_columns
-            if column not in available_columns
+            column for column in required_columns if column not in available_columns
         ]
 
         if missing_columns:
@@ -594,9 +568,7 @@ def _write_ready_batches(
     """
 
     while next_batch_to_write in completed_batches:
-        token_batch, batch_stats = completed_batches.pop(
-            next_batch_to_write
-        )
+        token_batch, batch_stats = completed_batches.pop(next_batch_to_write)
 
         validation_results.append(batch_stats)
         writer.write_batch(token_batch)
@@ -647,9 +619,7 @@ def process_corpus(
     _assert_dna_mode_active(tokenizer)
 
     n_workers = (
-        max_workers
-        if max_workers is not None
-        else max(1, (os.cpu_count() or 2) - 1)
+        max_workers if max_workers is not None else max(1, (os.cpu_count() or 2) - 1)
     )
 
     # Keep workers fed without allowing unbounded IPC/memory growth.
@@ -694,7 +664,6 @@ def process_corpus(
             initializer=init_worker_threads,
         ) as pool,
     ):
-
         # --------------------------------------------------------------
         # Submit batches while keeping the worker pool saturated.
         # --------------------------------------------------------------
@@ -721,9 +690,7 @@ def process_corpus(
             # ----------------------------------------------------------
 
             while len(pending_futures) >= inflight_limit:
-                done = next(
-                    as_completed(pending_futures)
-                )
+                done = next(as_completed(pending_futures))
 
                 batch_id = pending_futures.pop(done)
 
@@ -777,9 +744,7 @@ def process_corpus(
 
         shards_written = writer.shards_written
 
-    stats = merge_tokenization_stats(
-        validation_results
-    )
+    stats = merge_tokenization_stats(validation_results)
 
     stats.batches_processed = batches_processed
     stats.shards_written = shards_written
@@ -809,9 +774,7 @@ def carbon_tokenized_corpus(
     config: CarbonPipelineConfig,
     carbon: CarbonModelResource,
 ) -> dg.MaterializeResult:
-    context.log.info(
-        "Starting Carbon DNA tokenize_and_tag stage."
-    )
+    context.log.info("Starting Carbon DNA tokenize_and_tag stage.")
 
     stats = process_corpus(
         input_dir=config.pilot_output_dir,
@@ -854,9 +817,7 @@ def carbon_tokenized_corpus(
             "rows_tokenized": stats.rows_tokenized,
             "rows_filtered_qc": stats.rows_filtered_qc,
             "rows_filtered_short": stats.rows_filtered_short,
-            "rows_truncated_to_native_context": (
-                stats.rows_exceeding_native_context
-            ),
+            "rows_truncated_to_native_context": (stats.rows_exceeding_native_context),
             "max_native_context_tokens": MAX_NATIVE_CONTEXT_TOKENS,
             "max_dna_bases": MAX_DNA_BASES,
             "dna_kmer_size": DNA_KMER_SIZE,
@@ -864,8 +825,7 @@ def carbon_tokenized_corpus(
             "max_token_length": stats.max_token_length,
             "mean_token_length": (
                 round(
-                    stats.total_token_count
-                    / stats.rows_tokenized,
+                    stats.total_token_count / stats.rows_tokenized,
                     1,
                 )
                 if stats.rows_tokenized
@@ -874,7 +834,7 @@ def carbon_tokenized_corpus(
             "batches_processed": stats.batches_processed,
             "parquet_shards": stats.shards_written,
             "tokenizer_revision": carbon.tokenizer_revision,
-            "gpu_join_key":list(GPU_JOIN_KEY),
+            "gpu_join_key": list(GPU_JOIN_KEY),
             "qc_filter": "qc_flag == clean",
         },
     )
