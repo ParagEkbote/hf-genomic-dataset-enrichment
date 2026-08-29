@@ -6,7 +6,7 @@ Architecture
 
     Faceberg / Iceberg
             |
-          DuckDB
+         DuckDB
             |
       distributions.py
             |
@@ -44,12 +44,13 @@ are treated as canonical:
     strand
     taxonomy_domain
 """
-
 from __future__ import annotations
 
+import json
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,7 @@ from carbon_enrichment.assets.cpu.streaming import _read_local_parquet
 from carbon_enrichment.resources.faceberg import (
     PIPELINE_TABLES,
     PipelineCatalog,
+    SAMPLING_DRIFT_WARNING_THRESHOLD_PCT,
 )
 
 # ============================================================================
@@ -116,8 +118,13 @@ SAMPLING_STRATA = (
     "taxonomy_domain",
 )
 
-SAMPLING_DRIFT_WARNING_THRESHOLD_PCT = 2.0
-
+LENGTH_PROXY_BUCKET_LABELS = (
+    "<=512",
+    "513-2048",
+    "2049-8192",
+    "8193-32768",
+    ">32768",
+)
 
 # ============================================================================
 # SQL helpers
@@ -154,7 +161,385 @@ def length_bucket_expression(field: str = "sequence_length") -> str:
 
 
 # ============================================================================
-# Catalog-backed numeric statistics
+# Catalog-backed shard-wise analysis
+# ============================================================================
+
+DEFAULT_DISTRIBUTIONS_OUTPUT_DIR = (
+    Path.cwd() / "results" / "derived" / "distributions"
+)
+
+DEFAULT_DISTRIBUTIONS_OUTPUT_PATH = (
+    DEFAULT_DISTRIBUTIONS_OUTPUT_DIR
+    / "cpu_enriched_distributions.json"
+)
+
+
+def _catalog_shards(
+    catalog: PipelineCatalog,
+    *,
+    node_id: str,
+) -> list[str]:
+    """Discover the Parquet shards represented by a catalog table."""
+
+    if node_id not in PIPELINE_TABLES:
+        raise KeyError(
+            f"{node_id!r} is not a catalog-managed table. "
+            f"Available: {sorted(PIPELINE_TABLES)}"
+        )
+
+    from faceberg.catalog import discover_dataset
+
+    spec = PIPELINE_TABLES[node_id]
+    info = discover_dataset(
+        repo_id=spec["repo"],
+        config=spec["config"],
+    )
+
+    return [str(parquet_file.uri) for parquet_file in info.files]
+
+
+def _quote_string(value: str) -> str:
+    """Quote a SQL string literal for DuckDB."""
+
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _merge_numeric(
+    accumulator: dict[str, dict[str, Any]],
+    row: dict[str, Any],
+    column: str,
+) -> None:
+    """Merge one shard's numeric aggregate into the population."""
+
+    count = int(row[f"count_{column}"] or 0)
+    missing = int(row[f"missing_{column}"] or 0)
+    current = accumulator[column]
+    current["missing"] += missing
+
+    if count == 0:
+        return
+
+    mean = float(row[f"mean_{column}"])
+    sumsq = float(row[f"sumsq_{column}"] or 0.0)
+    shard_m2 = max(0.0, sumsq - count * mean * mean)
+
+    if current["count"] == 0:
+        current.update(
+            {
+                "count": count,
+                "mean": mean,
+                "m2": shard_m2,
+                "min": row[f"min_{column}"],
+                "max": row[f"max_{column}"],
+            }
+        )
+        return
+
+    old_count = current["count"]
+    old_mean = current["mean"]
+    total_count = old_count + count
+    delta = mean - old_mean
+
+    current["m2"] += (
+        shard_m2
+        + delta * delta * old_count * count / total_count
+    )
+    current["mean"] = (
+        old_mean + delta * count / total_count
+    )
+    current["count"] = total_count
+
+    shard_min = row[f"min_{column}"]
+    shard_max = row[f"max_{column}"]
+
+    if shard_min is not None:
+        current["min"] = (
+            shard_min
+            if current["min"] is None
+            else min(current["min"], shard_min)
+        )
+
+    if shard_max is not None:
+        current["max"] = (
+            shard_max
+            if current["max"] is None
+            else max(current["max"], shard_max)
+        )
+
+
+def _finalize_numeric(
+    accumulator: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Return JSON-serializable numeric statistics."""
+
+    result: dict[str, dict[str, Any]] = {}
+
+    for column, stats in accumulator.items():
+        count = int(stats["count"])
+
+        result[column] = {
+            "count": count,
+            "missing": int(stats["missing"]),
+            "mean": stats["mean"] if count else None,
+            "std": (
+                (stats["m2"] / count) ** 0.5
+                if count
+                else None
+            ),
+            "min": stats["min"],
+            "max": stats["max"],
+        }
+
+    return result
+
+
+def _merge_histogram(
+    accumulator: Counter[str],
+    histogram: Any,
+) -> None:
+    """Merge a DuckDB histogram/map result."""
+
+    if histogram is None or not hasattr(histogram, "items"):
+        return
+
+    for value, count in histogram.items():
+        if value is None or str(value) == "":
+            continue
+        accumulator[str(value)] += int(count)
+
+
+class _CatalogReservoirSampler:
+    """Bounded reservoir sample collected during the shard scan."""
+
+    def __init__(self, sample_size: int, seed: int) -> None:
+        if sample_size < 0:
+            raise ValueError("sample_size must be >= 0")
+
+        import random
+
+        self.sample_size = sample_size
+        self.random = random.Random(seed)
+        self.rows: list[dict[str, Any]] = []
+        self.seen = 0
+
+    def update(self, rows: list[dict[str, Any]]) -> None:
+        """Update the reservoir with rows from one shard."""
+
+        for row in rows:
+            self.seen += 1
+
+            if self.sample_size == 0:
+                continue
+
+            if len(self.rows) < self.sample_size:
+                self.rows.append(row)
+                continue
+
+            index = self.random.randrange(self.seen)
+            if index < self.sample_size:
+                self.rows[index] = row
+
+
+def _counts_to_records(
+    counts: Counter[str],
+) -> list[dict[str, Any]]:
+    """Convert counts to visualization/JSON records."""
+
+    total = sum(counts.values())
+
+    return [
+        {
+            "value": value,
+            "count": count,
+            "percentage": (
+                count * 100.0 / total
+                if total
+                else 0.0
+            ),
+        }
+        for value, count in counts.most_common()
+    ]
+
+
+def _catalog_shard_aggregate_sql(shard_uri: str) -> str:
+    """Build the single aggregate query executed per remote shard."""
+
+    expressions: list[str] = ["COUNT(*) AS rows_processed"]
+
+    for column in NUMERIC_COLUMNS:
+        expressions.extend(
+            [
+                f"COUNT({column}) AS count_{column}",
+                f"COUNT(*) - COUNT({column}) AS missing_{column}",
+                f"AVG({column}) AS mean_{column}",
+                f"SUM({column} * {column}) AS sumsq_{column}",
+                f"MIN({column}) AS min_{column}",
+                f"MAX({column}) AS max_{column}",
+            ]
+        )
+
+    for column in CATEGORICAL_COLUMNS:
+        expressions.append(
+            f"histogram(CAST({column} AS VARCHAR)) "
+            f"AS histogram_{column}"
+        )
+
+    expressions.append(
+        f"histogram({length_bucket_expression()}) "
+        "AS histogram_length_bucket"
+    )
+
+    for column in (
+        "is_coding_region",
+        "strand",
+        "taxonomy_domain",
+    ):
+        expressions.append(
+            f"histogram(CAST({column} AS VARCHAR)) "
+            f"AS histogram_{column}_sampling"
+        )
+
+    return f"""
+        SELECT
+            {", ".join(expressions)}
+        FROM {_quote_string(shard_uri)}
+    """
+
+
+def _catalog_shard_analysis(
+    catalog: PipelineCatalog,
+    *,
+    node_id: str,
+    visualization_sample_size: int = DEFAULT_VISUALIZATION_SAMPLE_SIZE,
+    random_seed: int = DEFAULT_RANDOM_SEED,
+) -> tuple[
+    int,
+    int,
+    dict[str, dict[str, Any]],
+    dict[str, Counter[str]],
+    dict[str, Counter[str]],
+    list[dict[str, Any]],
+]:
+    """Scan every remote shard once and merge all population statistics."""
+
+    shards = _catalog_shards(catalog, node_id=node_id)
+
+    numeric = {
+        column: {
+            "count": 0,
+            "missing": 0,
+            "mean": 0.0,
+            "m2": 0.0,
+            "min": None,
+            "max": None,
+        }
+        for column in NUMERIC_COLUMNS
+    }
+
+    categorical = {
+        column: Counter()
+        for column in CATEGORICAL_COLUMNS
+    }
+
+    sampling = {
+        name: Counter()
+        for name in SAMPLING_STRATA
+    }
+
+    reservoir = _CatalogReservoirSampler(
+        visualization_sample_size,
+        random_seed,
+    )
+
+    from carbon_enrichment.resources.duckdb import get_connection
+
+    con = get_connection()
+    total_rows = 0
+    processed_shards = 0
+
+    try:
+        with tqdm(
+            shards,
+            desc="CPU-enriched shards",
+            unit="shard",
+        ) as progress:
+            for shard_uri in progress:
+                from time import perf_counter
+
+                shard_start = perf_counter()
+
+                result = con.execute(
+                    _catalog_shard_aggregate_sql(shard_uri)
+                ).fetchdf()
+
+                row = result.iloc[0].to_dict()
+                rows = int(row["rows_processed"])
+
+                if visualization_sample_size > 0:
+                    sample_sql = f"""
+                        SELECT {", ".join(VISUALIZATION_COLUMNS)}
+                        FROM {_quote_string(shard_uri)}
+                        USING SAMPLE reservoir({max(1, visualization_sample_size // max(1, len(shards)))} ROWS) 
+                        REPEATABLE ({random_seed})
+                    """
+                    sample_df = con.execute(sample_sql).fetchdf()
+                    reservoir.update(
+                        sample_df.to_dict(orient="records")
+                    )
+
+                total_rows += rows
+                processed_shards += 1
+
+                for column in NUMERIC_COLUMNS:
+                    _merge_numeric(
+                        numeric,
+                        row,
+                        column,
+                    )
+
+                for column in CATEGORICAL_COLUMNS:
+                    _merge_histogram(
+                        categorical[column],
+                        row[f"histogram_{column}"],
+                    )
+
+                _merge_histogram(
+                    sampling["length_bucket"],
+                    row["histogram_length_bucket"],
+                )
+
+                for column in (
+                    "is_coding_region",
+                    "strand",
+                    "taxonomy_domain",
+                ):
+                    _merge_histogram(
+                        sampling[column],
+                        row[f"histogram_{column}_sampling"],
+                    )
+
+                progress.set_postfix(
+                    shard_time=(
+                        f"{perf_counter() - shard_start:.2f}s"
+                    ),
+                    rows=f"{rows:,}",
+                    total=f"{total_rows:,}",
+                )
+    finally:
+        con.close()
+
+    return (
+        total_rows,
+        processed_shards,
+        numeric,
+        categorical,
+        sampling,
+        reservoir.rows,
+    )
+
+
+# ============================================================================
+# Catalog-backed public statistics
 # ============================================================================
 
 
@@ -164,42 +549,35 @@ def catalog_numeric_statistics(
     node_id: str = "cpu_enriched",
     columns: tuple[str, ...] = NUMERIC_COLUMNS,
 ) -> Any:
-    """Compute complete-population numeric statistics through DuckDB.
-
-    Every valid value in the catalog table contributes. No visualization
-    sample is involved.
-    """
+    """Compute complete-population numeric statistics."""
 
     if not columns:
         raise ValueError("columns must not be empty")
 
-    expressions: list[str] = []
+    (
+        rows_processed,
+        _,
+        numeric,
+        _,
+        _,
+        _,
+    ) = _catalog_shard_analysis(
+        catalog,
+        node_id=node_id,
+    )
+
+    import pandas as pd
+
+    finalized = _finalize_numeric(numeric)
+    row: dict[str, Any] = {
+        "rows_processed": rows_processed,
+    }
 
     for column in columns:
-        expressions.extend(
-            [
-                f"COUNT({column}) AS count_{column}",
-                f"COUNT(*) - COUNT({column}) AS missing_{column}",
-                f"AVG({column}) AS mean_{column}",
-                f"STDDEV_POP({column}) AS std_{column}",
-                f"MIN({column}) AS min_{column}",
-                f"MAX({column}) AS max_{column}",
-            ]
-        )
+        for key, value in finalized[column].items():
+            row[f"{key}_{column}"] = value
 
-    sql = f"""
-        SELECT
-            COUNT(*) AS rows_processed,
-            {", ".join(expressions)}
-        FROM {_table(catalog, node_id)}
-    """
-
-    return catalog.query(sql)
-
-
-# ============================================================================
-# Catalog-backed categorical statistics
-# ============================================================================
+    return pd.DataFrame([row])
 
 
 def catalog_categorical_statistics(
@@ -208,35 +586,32 @@ def catalog_categorical_statistics(
     node_id: str = "cpu_enriched",
     columns: tuple[str, ...] = CATEGORICAL_COLUMNS,
 ) -> dict[str, Any]:
-    """Compute complete-population categorical frequencies.
+    """Compute complete-population categorical frequencies."""
 
-    Each categorical field is queried independently. This avoids the
-    combinatorial explosion that would result from grouping all
-    categorical columns together.
-    """
+    if not columns:
+        raise ValueError("columns must not be empty")
 
-    result: dict[str, Any] = {}
+    (
+        _,
+        _,
+        _,
+        categorical,
+        _,
+        _,
+    ) = _catalog_shard_analysis(
+        catalog,
+        node_id=node_id,
+    )
 
-    for column in columns:
-        sql = f"""
-            SELECT
-                CAST({column} AS VARCHAR) AS value,
-                COUNT(*) AS count,
-                COUNT(*) * 100.0
-                    / SUM(COUNT(*)) OVER () AS percentage
-            FROM {_table(catalog, node_id)}
-            GROUP BY {column}
-            ORDER BY count DESC, value
-        """
+    import pandas as pd
 
-        result[column] = catalog.query(sql)
-
-    return result
-
-
-# ============================================================================
-# Sampling-stratum distributions
-# ============================================================================
+    return {
+        column: pd.DataFrame(
+            _counts_to_records(categorical[column]),
+            columns=["value", "count", "percentage"],
+        )
+        for column in columns
+    }
 
 
 def catalog_sampling_stratum_statistics(
@@ -246,59 +621,50 @@ def catalog_sampling_stratum_statistics(
 ) -> dict[str, Any]:
     """Compute the four canonical sampling-stratum distributions."""
 
-    table = _table(catalog, node_id)
+    (
+        _,
+        _,
+        _,
+        _,
+        sampling,
+        _,
+    ) = _catalog_shard_analysis(
+        catalog,
+        node_id=node_id,
+    )
 
-    queries = {
-        "length_bucket": f"""
-            SELECT
-                {length_bucket_expression()} AS value,
-                COUNT(*) AS count,
-                COUNT(*) * 100.0 / SUM(COUNT(*)) OVER ()
-                    AS percentage
-            FROM {table}
-            GROUP BY 1
-            ORDER BY
-                CASE value
-                    WHEN '<=512' THEN 1
-                    WHEN '513-2048' THEN 2
-                    WHEN '2049-8192' THEN 3
-                    WHEN '8193-32768' THEN 4
-                    WHEN '>32768' THEN 5
-                END
-        """,
-        "is_coding_region": f"""
-            SELECT
-                CAST(is_coding_region AS VARCHAR) AS value,
-                COUNT(*) AS count,
-                COUNT(*) * 100.0 / SUM(COUNT(*)) OVER ()
-                    AS percentage
-            FROM {table}
-            GROUP BY is_coding_region
-            ORDER BY count DESC, value
-        """,
-        "strand": f"""
-            SELECT
-                CAST(strand AS VARCHAR) AS value,
-                COUNT(*) AS count,
-                COUNT(*) * 100.0 / SUM(COUNT(*)) OVER ()
-                    AS percentage
-            FROM {table}
-            GROUP BY strand
-            ORDER BY count DESC, value
-        """,
-        "taxonomy_domain": f"""
-            SELECT
-                CAST(taxonomy_domain AS VARCHAR) AS value,
-                COUNT(*) AS count,
-                COUNT(*) * 100.0 / SUM(COUNT(*)) OVER ()
-                    AS percentage
-            FROM {table}
-            GROUP BY taxonomy_domain
-            ORDER BY count DESC, value
-        """,
+    import pandas as pd
+
+    result = {
+        name: pd.DataFrame(
+            _counts_to_records(sampling[name]),
+            columns=["value", "count", "percentage"],
+        )
+        for name in SAMPLING_STRATA
     }
 
-    return {name: catalog.query(sql) for name, sql in queries.items()}
+    order = {
+        label: index
+        for index, label in enumerate(
+            LENGTH_PROXY_BUCKET_LABELS
+        )
+    }
+
+    length_df = result["length_bucket"]
+
+    if not length_df.empty:
+        length_df["_order"] = (
+            length_df["value"]
+            .map(lambda x: order.get(x, len(order)))
+        )
+        result["length_bucket"] = (
+            length_df
+            .sort_values("_order")
+            .drop(columns="_order")
+            .reset_index(drop=True)
+        )
+
+    return result
 
 
 # ============================================================================
@@ -312,15 +678,17 @@ class CatalogDistributionAnalysis:
 
     node_id: str
     rows_processed: int
-    numeric: Any
-    categorical: dict[str, Any]
-    sampling_strata: dict[str, Any]
+    numeric: dict[str, dict[str, Any]]
+    categorical: dict[str, list[dict[str, Any]]]
+    sampling_strata: dict[str, list[dict[str, Any]]]
     visualization_sample: list[dict[str, Any]]
     visualization_sample_size: int
     random_seed: int
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable representation."""
+
         return asdict(self)
 
 
@@ -331,40 +699,50 @@ def _catalog_visualization_sample(
     sample_size: int,
     random_seed: int,
 ) -> list[dict[str, Any]]:
-    """Return a bounded deterministic-ish sample for visualization.
+    """Compatibility helper; primary analysis collects the sample in-pass."""
 
-    The sample is intentionally separate from population statistics.
-
-    DuckDB's hash ordering makes the selection stable for a fixed source
-    table and seed while avoiding a full in-memory load. This is not the
-    same sampling operation used to construct sampled_cpu; it is solely a
-    visualization sample.
-    """
-
+    del catalog, node_id, random_seed
     if sample_size < 0:
         raise ValueError("sample_size must be >= 0")
+    return []
 
-    if sample_size == 0:
-        return []
 
-    columns = ", ".join(VISUALIZATION_COLUMNS)
+def _json_default(value: Any) -> Any:
+    """Serialize common NumPy/Pandas scalar values."""
 
-    # DuckDB hash() is used only to bound visualization rows. This must not
-    # be confused with sampling.py's SHA-256 corpus-selection procedure.
-    sql = f"""
-        SELECT
-            {columns}
-        FROM {_table(catalog, node_id)}
-        ORDER BY
-            hash(
-                CAST(record_id AS VARCHAR) || '|' || '{random_seed}'
-            )
-        LIMIT {int(sample_size)}
-    """
+    if hasattr(value, "item"):
+        return value.item()
 
-    df = catalog.query(sql)
+    if isinstance(value, Path):
+        return str(value)
 
-    return df.to_dict(orient="records")
+    raise TypeError(
+        f"Object of type {type(value).__name__} "
+        "is not JSON serializable"
+    )
+
+
+def save_catalog_distribution_analysis(
+    analysis: CatalogDistributionAnalysis,
+    *,
+    output_path: str | Path = DEFAULT_DISTRIBUTIONS_OUTPUT_PATH,
+) -> Path:
+    """Persist distribution results for later visualization."""
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    path.write_text(
+        json.dumps(
+            analysis.to_dict(),
+            indent=2,
+            sort_keys=True,
+            default=_json_default,
+        ),
+        encoding="utf-8",
+    )
+
+    return path
 
 
 def analyze_catalog_distributions(
@@ -373,52 +751,48 @@ def analyze_catalog_distributions(
     node_id: str = "cpu_enriched",
     visualization_sample_size: int = DEFAULT_VISUALIZATION_SAMPLE_SIZE,
     random_seed: int = DEFAULT_RANDOM_SEED,
+    output_path: str | Path | None = (
+        DEFAULT_DISTRIBUTIONS_OUTPUT_PATH
+    ),
 ) -> CatalogDistributionAnalysis:
-    """Analyze a catalog-backed CPU-enriched population.
+    """Analyze the catalog population and persist a visualization artifact.
 
-    Population statistics are calculated over the complete table by
-    DuckDB. Only the visualization subset is bounded.
-
-    No artifact is written by this function.
+    Population distributions are computed from one aggregate query per
+    remote Parquet shard. The visualization sample is bounded separately.
     """
 
-    row_count = catalog.query(
-        f"""
-        SELECT COUNT(*) AS n
-        FROM {_table(catalog, node_id)}
-        """
-    )
-
-    rows_processed = int(row_count["n"].iloc[0])
-
-    numeric = catalog_numeric_statistics(
+    (
+        rows_processed,
+        processed_shards,
+        numeric_accumulator,
+        categorical_accumulator,
+        sampling_accumulator,
+        visualization_sample,
+    ) = _catalog_shard_analysis(
         catalog,
         node_id=node_id,
-    )
-
-    categorical = catalog_categorical_statistics(
-        catalog,
-        node_id=node_id,
-    )
-
-    sampling_strata = catalog_sampling_stratum_statistics(
-        catalog,
-        node_id=node_id,
-    )
-
-    visualization_sample = _catalog_visualization_sample(
-        catalog,
-        node_id=node_id,
-        sample_size=visualization_sample_size,
+        visualization_sample_size=visualization_sample_size,
         random_seed=random_seed,
     )
 
-    return CatalogDistributionAnalysis(
+    table = catalog.load_table(node_id)
+
+    analysis = CatalogDistributionAnalysis(
         node_id=node_id,
         rows_processed=rows_processed,
-        numeric=numeric,
-        categorical=categorical,
-        sampling_strata=sampling_strata,
+        numeric=_finalize_numeric(numeric_accumulator),
+        categorical={
+            column: _counts_to_records(
+                categorical_accumulator[column]
+            )
+            for column in CATEGORICAL_COLUMNS
+        },
+        sampling_strata={
+            name: _counts_to_records(
+                sampling_accumulator[name]
+            )
+            for name in SAMPLING_STRATA
+        },
         visualization_sample=visualization_sample,
         visualization_sample_size=len(visualization_sample),
         random_seed=random_seed,
@@ -426,14 +800,48 @@ def analyze_catalog_distributions(
             "population_scope": "complete_catalog_table",
             "population_statistics_are_not_sampled": True,
             "visualization_sample_is_analysis_subset": True,
-            "visualization_sample_method": ("bounded DuckDB hash ordering"),
+            "visualization_sample_method": (
+                "bounded DuckDB hash ordering"
+            ),
             "visualization_sample_is_not_corpus_sampling": True,
             "sampling_strata": SAMPLING_STRATA,
             "sampling_drift_warning_threshold_pct": (
                 SAMPLING_DRIFT_WARNING_THRESHOLD_PCT
             ),
+            "catalog_scan_mode": (
+                "one_aggregate_query_per_remote_shard"
+            ),
+            "shards_processed": processed_shards,
+            "dataset_repo": PIPELINE_TABLES[node_id]["repo"],
+            "dataset_config": PIPELINE_TABLES[node_id]["config"],
+            "dataset_revision": str(
+                table.properties.get(
+                    "hf.dataset.revision",
+                    "",
+                )
+            ),
+            "analysis_timestamp_utc": (
+                datetime.now(timezone.utc).isoformat()
+            ),
         },
     )
+
+    if output_path is not None:
+        path = save_catalog_distribution_analysis(
+            analysis,
+            output_path=output_path,
+        )
+
+        print()
+        print("=" * 60)
+        print("Distribution analysis complete")
+        print("=" * 60)
+        print(f"Node:             {node_id}")
+        print(f"Shards processed: {processed_shards:,}")
+        print(f"Rows processed:   {rows_processed:,}")
+        print(f"Output:           {path}")
+
+    return analysis
 
 
 # ============================================================================
@@ -775,3 +1183,21 @@ def analyze_cpu_enriched_corpus(
         random_seed=random_seed,
         show_progress=show_progress,
     )
+
+
+def main() -> None:
+    """Run the complete catalog-backed distribution analysis."""
+
+    catalog = PipelineCatalog.local("./carbon-catalog")
+
+    analyze_catalog_distributions(
+        catalog,
+        node_id="cpu_enriched",
+        visualization_sample_size=DEFAULT_VISUALIZATION_SAMPLE_SIZE,
+        random_seed=DEFAULT_RANDOM_SEED,
+        output_path=DEFAULT_DISTRIBUTIONS_OUTPUT_PATH,
+    )
+
+
+if __name__ == "__main__":
+    main()
