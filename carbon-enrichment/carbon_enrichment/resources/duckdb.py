@@ -62,6 +62,8 @@ representativeness of the complete ~32.4M-row CPU-enriched population.
 from __future__ import annotations
 
 from typing import Any, cast
+from time import perf_counter
+from collections.abc import Iterable
 
 from carbon_enrichment.resources.faceberg import PIPELINE_TABLES
 
@@ -208,7 +210,50 @@ def register_catalog_table(
 
     return f"cat.{identifier}"
 
+def scan_remote_shards(
+    con: Any,
+    shard_uris: Iterable[str],
+    *,
+    columns: tuple[str, ...],
+) -> Iterable[Any]:
+    """Scan remote Parquet shards sequentially with timing."""
 
+    from tqdm import tqdm
+
+    shards = list(shard_uris)
+    overall_start = perf_counter()
+
+    with tqdm(
+        shards,
+        desc="CPU-enriched shards",
+        unit="shard",
+    ) as progress:
+        for uri in progress:
+            shard_start = perf_counter()
+
+            column_sql = ", ".join(
+                quote_identifier(column)
+                for column in columns
+            )
+
+            result = con.execute(
+                f"""
+                SELECT {column_sql}
+                FROM {quote_string(uri)}
+                """
+            ).fetchdf()
+
+            shard_elapsed = perf_counter() - shard_start
+            overall_elapsed = perf_counter() - overall_start
+            average_shard = overall_elapsed / progress.n
+
+            progress.set_postfix(
+                shard_time=f"{shard_elapsed:.1f}s",
+                avg=f"{average_shard:.1f}s",
+                rows=f"{len(result):,}",
+            )
+
+            yield result
 # ============================================================================
 # Sampling-derived expressions
 # ============================================================================

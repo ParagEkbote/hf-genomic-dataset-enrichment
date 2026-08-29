@@ -546,6 +546,28 @@ class PipelineCatalog:
         return (
             "INSTALL iceberg; LOAD iceberg;"
         )
+    
+    def list_data_files(
+        self,
+        node_id: str,
+    ) -> list[str]:
+        """Return the underlying Parquet file URIs for a catalog table."""
+
+        if node_id not in PIPELINE_TABLES:
+            raise KeyError(
+                f"{node_id!r} is not a catalog-managed pipeline table"
+            )
+
+        from faceberg.catalog import discover_dataset
+
+        spec = PIPELINE_TABLES[node_id]
+
+        info = discover_dataset(
+            repo_id=spec["repo"],
+            config=spec["config"],
+        )
+
+        return [str(parquet_file.uri) for parquet_file in info.files]
 
 
 # ============================================================================
