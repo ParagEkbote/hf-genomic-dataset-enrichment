@@ -98,6 +98,15 @@ def get_connection(
     con.execute("INSTALL iceberg")
     con.execute("LOAD iceberg")
 
+    con.execute(
+        """
+        CREATE SECRET IF NOT EXISTS hf_token (
+            TYPE huggingface,
+            PROVIDER credential_chain
+        )
+        """
+    )
+
     # Create an in-memory DuckDB database named `cat`.
     con.execute("ATTACH ':memory:' AS cat")
 
