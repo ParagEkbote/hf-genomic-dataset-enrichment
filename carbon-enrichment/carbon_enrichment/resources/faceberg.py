@@ -58,6 +58,49 @@ from faceberg.iceberg import (
 )
 from pyiceberg.types import StringType
 
+
+
+LINEAGE_MANIFEST_FILENAME = "lineage.yml"
+
+
+def _lineage_manifest_path(catalog_path: Path) -> Path:
+    return catalog_path / LINEAGE_MANIFEST_FILENAME
+
+
+def write_lineage_manifest(catalog_path: str | Path) -> Path:
+    """Write the full PIPELINE_TABLES registry (streaming + catalog nodes)
+    as a sibling YAML file next to faceberg.yml.
+
+    Unlike faceberg.yml, this is plain data we own outright — it is never
+    read or rewritten by _LocalCatalog, so it's safe to include nodes with
+    no Iceberg table (access_mode == "streaming").
+    """
+
+    import yaml
+
+    resolved_path = Path(catalog_path).expanduser().resolve()
+    resolved_path.mkdir(parents=True, exist_ok=True)
+
+    manifest = {
+        node_id: {
+            "table": spec["table"],
+            "repo": spec["repo"],
+            "config": spec["config"],
+            "upstream": spec["upstream"],
+            "access_mode": spec["access_mode"],
+            "description": spec["description"],
+        }
+        for node_id, spec in PIPELINE_TABLES.items()
+    }
+
+    manifest_path = _lineage_manifest_path(resolved_path)
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    return manifest_path
+
 # ============================================================================
 # Monkey-patching
 # ============================================================================
@@ -160,44 +203,97 @@ _iceberg_mod.write_manifest = _patched_write_manifest
 # Pipeline table registry
 # ============================================================================
 
-
 class PipelineTableSpec(TypedDict):
-    table: str
+    table: str | None
+    """Iceberg-qualified table name (e.g. "carbon.cpu_enriched_sequences").
+    None for streaming-only nodes that are never materialized as a
+    catalog table."""
+
     repo: str
+    """HF Hub repo id this node's data lives in."""
+
     config: str | None
+    """HF dataset config name, if the repo has more than one."""
+
+    upstream: str | None
+    """node_id of this node's immediate lineage parent within this
+    registry, or None for root sources with no upstream tracked here."""
+
+    access_mode: str
+    """"catalog" if Faceberg/Iceberg-backed and DuckDB-queryable via
+    cat.<table>, or "streaming" if only accessible as an IterableDataset."""
+
+    description: str
+    """One-line human-readable purpose. Replaces ad hoc inline comments."""
 
 
 PIPELINE_TABLES: dict[str, PipelineTableSpec] = {
+    "pretraining_corpus": {
+        "table": None,
+        "repo": "HuggingFaceBio/carbon-pretraining-corpus",
+        "config": None,
+        "upstream": None,
+        "access_mode": "streaming",
+        "description": (
+            "Root source corpus (eukaryote_generator/train split). "
+            "Streaming-only — never cataloged."
+        ),
+    },
     "cpu_enriched": {
         "table": "carbon.cpu_enriched_sequences",
         "repo": "AINovice2005/carbon-cpu-enriched-sequences",
         "config": None,
+        "upstream": "pretraining_corpus",
+        "access_mode": "catalog",
+        "description": "CPU-derived sequence features from the 75% pretraining split.",
     },
     "sampled_cpu": {
-        # Stratified CPU-enriched population used as the GPU input corpus.
-        # The HF artifact name contains "dedup", but the lineage edge is
-        # deterministic per-row-hash sampling with representativeness
-        # validation.
         "table": "carbon.pilot_corpus_dedup",
         "repo": "AINovice2005/carbon-pilot-corpus-dedup",
         "config": None,
+        "upstream": "cpu_enriched",
+        "access_mode": "catalog",
+        "description": (
+            "Stratified CPU-enriched population used as the GPU input "
+            "corpus. HF artifact name contains 'dedup', but the lineage "
+            "edge is deterministic per-row-hash sampling with "
+            "representativeness validation, not deduplication."
+        ),
     },
     "tokenized": {
         "table": "carbon.tokenized_corpus",
         "repo": "AINovice2005/carbon-tokenized-corpus",
         "config": None,
+        "upstream": "sampled_cpu",
+        "access_mode": "catalog",
+        "description": "Model-ready tokenized input from the sampled CPU population.",
     },
     "likelihood_stats": {
         "table": "carbon.likelihood_stats",
         "repo": "AINovice2005/carbon-likelihood-stats",
         "config": None,
+        "upstream": "tokenized",
+        "access_mode": "catalog",
+        "description": "Per-sequence model likelihood statistics from GPU enrichment.",
     },
     "embeddings": {
         "table": "carbon.embeddings",
         "repo": "AINovice2005/carbon-embeddings",
         "config": None,
+        "upstream": "tokenized",
+        "access_mode": "catalog",
+        "description": "Model-derived sequence embeddings from GPU enrichment.",
     },
 }
+
+
+def catalog_managed_tables() -> dict[str, PipelineTableSpec]:
+    """PIPELINE_TABLES filtered to catalog-backed (Iceberg) nodes only."""
+    return {
+        node_id: spec
+        for node_id, spec in PIPELINE_TABLES.items()
+        if spec["access_mode"] == "catalog"
+    }
 
 
 # ============================================================================
@@ -321,7 +417,9 @@ class PipelineCatalog:
     # ------------------------------------------------------------------
 
     def ensure_initialized(self) -> None:
-        """Initialize the catalog and register missing pipeline tables."""
+        """Initialize the catalog, register missing catalog-backed tables,
+        and (re)write the full lineage manifest including streaming-only
+        nodes."""
 
         self._cat.init()
         self._cat.create_namespace_if_not_exists("carbon")
@@ -331,13 +429,18 @@ class PipelineCatalog:
             for table in self._cat.list_tables("carbon")
         }
 
-        for spec in PIPELINE_TABLES.values():
+        for spec in catalog_managed_tables().values():
             if spec["table"] not in existing:
                 self._cat.add_dataset(
                     spec["table"],
                     spec["repo"],
                     config=spec["config"],
                 )
+
+        if self.mode == "local":
+            # self.uri is "file://{catalog_path}" for local catalogs.
+            catalog_path = self.uri.removeprefix("file://")
+            write_lineage_manifest(catalog_path)
 
     def sync(self, node_id: str | None = None) -> None:
         """Sync one table or all catalog-managed tables."""
@@ -374,16 +477,15 @@ class PipelineCatalog:
     def load_table(self, node_id: str) -> Any:
         """Return the PyIceberg table handle for a pipeline node."""
 
-        if node_id not in PIPELINE_TABLES:
+        spec = PIPELINE_TABLES.get(node_id)
+
+        if spec is None or spec["access_mode"] != "catalog":
             raise KeyError(
                 f"{node_id!r} is not a catalog-managed pipeline table. "
-                f"Available: {sorted(PIPELINE_TABLES)}. "
-                "(pretraining_corpus/pretraining_split are streaming-only.)"
+                f"Available: {sorted(catalog_managed_tables())}."
             )
 
-        return self._cat.load_table(
-            PIPELINE_TABLES[node_id]["table"]
-        )
+        return self._cat.load_table(spec["table"])
 
     def scan(
         self,

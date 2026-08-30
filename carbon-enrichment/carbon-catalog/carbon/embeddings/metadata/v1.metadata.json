@@ -1,7 +1,7 @@
 {
   "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/embeddings",
-  "table-uuid": "4a3387a1-fadf-4204-8d59-c4c149fa47fc",
-  "last-updated-ms": 2576625288,
+  "table-uuid": "3bd7e224-4cf2-478c-9c70-ca6988e94d90",
+  "last-updated-ms": 1734057804,
   "last-column-id": 7,
   "schemas": [
     {
@@ -85,8 +85,8 @@
     {
       "snapshot-id": 1,
       "sequence-number": 0,
-      "timestamp-ms": 2576625288,
-      "manifest-list": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/embeddings/metadata/snap-1-0-631201d3-5683-4258-84f4-61a3221da5fd.avro",
+      "timestamp-ms": 1734057804,
+      "manifest-list": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/embeddings/metadata/snap-1-0-3771d0ff-364f-4506-8b4b-71083b5e6f59.avro",
       "summary": {
         "operation": "append",
         "added-files-size": "1240571599",

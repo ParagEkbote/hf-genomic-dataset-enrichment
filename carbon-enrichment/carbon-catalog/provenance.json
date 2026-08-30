@@ -1,0 +1,419 @@
+{
+  "pipeline_name": "carbon-enrichment",
+  "pipeline_version": null,
+  "generated_at": "2026-08-30T15:58:07.382009+00:00",
+  "nodes": [
+    {
+      "id": "pretraining_corpus",
+      "name": "Pretraining corpus",
+      "artifact_type": "source_corpus",
+      "metadata": {
+        "repository": "HuggingFaceBio/carbon-pretraining-corpus",
+        "split": "eukaryote_generator/train",
+        "access_mode": "streaming"
+      }
+    },
+    {
+      "id": "pretraining_split",
+      "name": "Pretraining split",
+      "artifact_type": "dataset_split",
+      "metadata": {
+        "fraction": 0.75,
+        "selection": "first_75_percent_by_source_order",
+        "access_mode": "streaming"
+      }
+    },
+    {
+      "id": "cpu_enriched",
+      "name": "CPU-enriched sequences",
+      "artifact_type": "cpu_enriched",
+      "metadata": {}
+    },
+    {
+      "id": "sampled_cpu",
+      "name": "Sampled CPU-enriched population",
+      "artifact_type": "sampled_population",
+      "metadata": {}
+    },
+    {
+      "id": "tokenized",
+      "name": "Tokenized corpus",
+      "artifact_type": "tokenized_dataset",
+      "metadata": {}
+    },
+    {
+      "id": "gpu_enriched",
+      "name": "GPU-enriched sequences",
+      "artifact_type": "gpu_enriched",
+      "metadata": {}
+    },
+    {
+      "id": "likelihood_stats",
+      "name": "Likelihood statistics",
+      "artifact_type": "derived_statistics",
+      "metadata": {}
+    },
+    {
+      "id": "embeddings",
+      "name": "Embeddings",
+      "artifact_type": "embedding_dataset",
+      "metadata": {}
+    }
+  ],
+  "operations": [
+    {
+      "id": "pretraining_split",
+      "name": "75% pretraining split",
+      "source": "pretraining_corpus",
+      "target": "pretraining_split",
+      "execution_mode": "dataset_operation",
+      "purpose": "Define the pretraining population as the first 75% of records in the source split.",
+      "parameters": {
+        "fraction": 0.75,
+        "selection": "first_75_percent_by_source_order"
+      }
+    },
+    {
+      "id": "cpu_enrichment",
+      "name": "CPU enrichment",
+      "source": "pretraining_split",
+      "target": "cpu_enriched",
+      "execution_mode": "dagster_asset",
+      "purpose": "Generate CPU-derived sequence features.",
+      "parameters": {}
+    },
+    {
+      "id": "cpu_sampling",
+      "name": "Stratified corpus sampling",
+      "source": "cpu_enriched",
+      "target": "sampled_cpu",
+      "execution_mode": "python_script",
+      "purpose": "Select the compute-controlled GPU input population.",
+      "parameters": {
+        "method": "deterministic_per_row_hash",
+        "allocation": "proportional",
+        "strata": [
+          "sequence_length_bucket_proxy",
+          "is_coding_region",
+          "strand",
+          "taxonomy_domain"
+        ]
+      }
+    },
+    {
+      "id": "tokenization",
+      "name": "Tokenization",
+      "source": "sampled_cpu",
+      "target": "tokenized",
+      "execution_mode": "dagster_asset",
+      "purpose": "Convert sampled sequences into model-ready tokenized input.",
+      "parameters": {}
+    },
+    {
+      "id": "gpu_processing",
+      "name": "Token-budgeted GPU processing",
+      "source": "tokenized",
+      "target": "gpu_enriched",
+      "execution_mode": "dagster_asset",
+      "purpose": "Generate model-derived sequence information within the configured token budget.",
+      "parameters": {}
+    },
+    {
+      "id": "likelihood_generation",
+      "name": "Likelihood statistics",
+      "source": "gpu_enriched",
+      "target": "likelihood_stats",
+      "execution_mode": "dagster_asset",
+      "purpose": "Produce per-sequence model likelihood statistics.",
+      "parameters": {}
+    },
+    {
+      "id": "embedding_generation",
+      "name": "Embedding generation",
+      "source": "gpu_enriched",
+      "target": "embeddings",
+      "execution_mode": "dagster_asset",
+      "purpose": "Produce model-derived sequence embeddings.",
+      "parameters": {}
+    }
+  ],
+  "analyses": [
+    {
+      "id": "phase1_catalog_validation",
+      "name": "Phase 1 catalog validation",
+      "sources": [
+        "cpu_enriched",
+        "sampled_cpu",
+        "tokenized",
+        "likelihood_stats",
+        "embeddings"
+      ],
+      "execution_mode": "duckdb",
+      "purpose": "Resolve and validate the current Faceberg/Iceberg pipeline artifacts through DuckDB.",
+      "parameters": {}
+    },
+    {
+      "id": "phase1_cpu_population_analysis",
+      "name": "Phase 1 CPU population analysis",
+      "sources": [
+        "cpu_enriched"
+      ],
+      "execution_mode": "duckdb",
+      "purpose": "Characterize the CPU-enriched population across the dimensions used for downstream sampling.",
+      "parameters": {
+        "dimensions": [
+          "sequence_length_bucket_proxy",
+          "is_coding_region",
+          "strand",
+          "taxonomy_domain"
+        ]
+      }
+    },
+    {
+      "id": "phase1_sampling_validation",
+      "name": "Phase 1 sampling validation",
+      "sources": [
+        "cpu_enriched",
+        "sampled_cpu"
+      ],
+      "execution_mode": "duckdb",
+      "purpose": "Compare the sampled CPU population against its source population to validate representativeness.",
+      "parameters": {
+        "comparison": "independent_and_joint_stratum_distributions",
+        "drift_warning_threshold_pct": 2.0
+      }
+    }
+  ],
+  "resolved_nodes": [
+    {
+      "node_id": "cpu_enriched",
+      "table": "carbon.cpu_enriched_sequences",
+      "repository": "AINovice2005/carbon-cpu-enriched-sequences",
+      "config": null,
+      "metadata_location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/cpu_enriched_sequences/metadata/v1.metadata.json",
+      "snapshot_id": "1",
+      "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/cpu_enriched_sequences",
+      "schema": {
+        "split": "string",
+        "begin_of_sequence": "string",
+        "end_of_sequence": "string",
+        "begin_of_gene": "string",
+        "end_of_gene": "string",
+        "gene_type": "string",
+        "species_type": "string",
+        "strand": "string",
+        "sequence": "string",
+        "molecule_type": "string",
+        "topology": "string",
+        "taxonomy": "string",
+        "record_id": "string",
+        "start": "long",
+        "end": "long",
+        "gc_content": "double",
+        "gc_skew": "double",
+        "sequence_length": "long",
+        "gene_length": "long",
+        "shannon_entropy": "double",
+        "kmer_frequency_vector": "list<double>",
+        "strand_normalized_sequence": "string",
+        "taxonomy_domain": "string",
+        "taxonomy_depth": "long",
+        "is_coding_region": "boolean",
+        "qc_flag": "string"
+      },
+      "partition_fields": [
+        "split"
+      ]
+    },
+    {
+      "node_id": "sampled_cpu",
+      "table": "carbon.pilot_corpus_dedup",
+      "repository": "AINovice2005/carbon-pilot-corpus-dedup",
+      "config": null,
+      "metadata_location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/pilot_corpus_dedup/metadata/v1.metadata.json",
+      "snapshot_id": "1",
+      "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/pilot_corpus_dedup",
+      "schema": {
+        "split": "string",
+        "begin_of_sequence": "string",
+        "end_of_sequence": "string",
+        "begin_of_gene": "string",
+        "end_of_gene": "string",
+        "gene_type": "string",
+        "species_type": "string",
+        "strand": "string",
+        "sequence": "string",
+        "molecule_type": "string",
+        "topology": "string",
+        "taxonomy": "string",
+        "record_id": "string",
+        "start": "long",
+        "end": "long",
+        "gc_content": "double",
+        "gc_skew": "double",
+        "sequence_length": "long",
+        "gene_length": "long",
+        "shannon_entropy": "double",
+        "kmer_frequency_vector": "list<double>",
+        "strand_normalized_sequence": "string",
+        "taxonomy_domain": "string",
+        "taxonomy_depth": "long",
+        "is_coding_region": "boolean",
+        "qc_flag": "string"
+      },
+      "partition_fields": [
+        "split"
+      ]
+    },
+    {
+      "node_id": "tokenized",
+      "table": "carbon.tokenized_corpus",
+      "repository": "AINovice2005/carbon-tokenized-corpus",
+      "config": null,
+      "metadata_location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/tokenized_corpus/metadata/v1.metadata.json",
+      "snapshot_id": "1",
+      "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/tokenized_corpus",
+      "schema": {
+        "split": "string",
+        "record_id": "string",
+        "start": "long",
+        "end": "long",
+        "token_ids": "list<int>",
+        "token_mask": "list<int>",
+        "token_length": "int"
+      },
+      "partition_fields": [
+        "split"
+      ]
+    },
+    {
+      "node_id": "likelihood_stats",
+      "table": "carbon.likelihood_stats",
+      "repository": "AINovice2005/carbon-likelihood-stats",
+      "config": null,
+      "metadata_location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/likelihood_stats/metadata/v1.metadata.json",
+      "snapshot_id": "1",
+      "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/likelihood_stats",
+      "schema": {
+        "split": "string",
+        "record_id": "string",
+        "start": "long",
+        "end": "long",
+        "mean_log_prob": "float",
+        "sum_log_prob": "float",
+        "perplexity": "float",
+        "supervised_position_count": "long",
+        "min_token_logprob": "float",
+        "argmin_position": "long",
+        "per_token_logprob_std": "float"
+      },
+      "partition_fields": [
+        "split"
+      ]
+    },
+    {
+      "node_id": "embeddings",
+      "table": "carbon.embeddings",
+      "repository": "AINovice2005/carbon-embeddings",
+      "config": null,
+      "metadata_location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/embeddings/metadata/v1.metadata.json",
+      "snapshot_id": "1",
+      "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/embeddings",
+      "schema": {
+        "split": "string",
+        "record_id": "string",
+        "start": "long",
+        "end": "long",
+        "embedding": "list<float>",
+        "embedding_norm": "float"
+      },
+      "partition_fields": [
+        "split"
+      ]
+    }
+  ],
+  "executions": [
+    {
+      "query_id": "catalog_resolution_cpu_enriched",
+      "purpose": "Resolve the live Faceberg/Iceberg catalog entry without executing a DuckDB data query.",
+      "sql": "-- metadata-only validation; no DuckDB query executed",
+      "tables": [
+        "cpu_enriched"
+      ],
+      "row_count": null,
+      "elapsed_seconds": 0.002336821999961103,
+      "result": {
+        "accessible": true,
+        "validation_mode": "faceberg_metadata",
+        "metadata_location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/cpu_enriched_sequences/metadata/v1.metadata.json"
+      }
+    },
+    {
+      "query_id": "catalog_resolution_sampled_cpu",
+      "purpose": "Resolve the live Faceberg/Iceberg catalog entry without executing a DuckDB data query.",
+      "sql": "-- metadata-only validation; no DuckDB query executed",
+      "tables": [
+        "sampled_cpu"
+      ],
+      "row_count": null,
+      "elapsed_seconds": 0.0047912130003169295,
+      "result": {
+        "accessible": true,
+        "validation_mode": "faceberg_metadata",
+        "metadata_location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/pilot_corpus_dedup/metadata/v1.metadata.json"
+      }
+    },
+    {
+      "query_id": "catalog_resolution_tokenized",
+      "purpose": "Resolve the live Faceberg/Iceberg catalog entry without executing a DuckDB data query.",
+      "sql": "-- metadata-only validation; no DuckDB query executed",
+      "tables": [
+        "tokenized"
+      ],
+      "row_count": null,
+      "elapsed_seconds": 0.002664401999936672,
+      "result": {
+        "accessible": true,
+        "validation_mode": "faceberg_metadata",
+        "metadata_location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/tokenized_corpus/metadata/v1.metadata.json"
+      }
+    },
+    {
+      "query_id": "catalog_resolution_likelihood_stats",
+      "purpose": "Resolve the live Faceberg/Iceberg catalog entry without executing a DuckDB data query.",
+      "sql": "-- metadata-only validation; no DuckDB query executed",
+      "tables": [
+        "likelihood_stats"
+      ],
+      "row_count": null,
+      "elapsed_seconds": 0.0017782210006771493,
+      "result": {
+        "accessible": true,
+        "validation_mode": "faceberg_metadata",
+        "metadata_location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/likelihood_stats/metadata/v1.metadata.json"
+      }
+    },
+    {
+      "query_id": "catalog_resolution_embeddings",
+      "purpose": "Resolve the live Faceberg/Iceberg catalog entry without executing a DuckDB data query.",
+      "sql": "-- metadata-only validation; no DuckDB query executed",
+      "tables": [
+        "embeddings"
+      ],
+      "row_count": null,
+      "elapsed_seconds": 0.0014619780004068161,
+      "result": {
+        "accessible": true,
+        "validation_mode": "faceberg_metadata",
+        "metadata_location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/embeddings/metadata/v1.metadata.json"
+      }
+    }
+  ],
+  "execution": {
+    "engine": "faceberg_metadata",
+    "catalog_type": "PipelineCatalog",
+    "catalog_uri": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog",
+    "generated_at": "2026-08-30T15:58:07.382009+00:00",
+    "output_path": "/teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/provenance.json"
+  }
+}

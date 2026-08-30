@@ -1,0 +1,45 @@
+pretraining_corpus:
+  table: null
+  repo: HuggingFaceBio/carbon-pretraining-corpus
+  config: null
+  upstream: null
+  access_mode: streaming
+  description: "Root source corpus (eukaryote_generator/train split). Streaming-only\
+    \ \u2014 never cataloged."
+cpu_enriched:
+  table: carbon.cpu_enriched_sequences
+  repo: AINovice2005/carbon-cpu-enriched-sequences
+  config: null
+  upstream: pretraining_corpus
+  access_mode: catalog
+  description: CPU-derived sequence features from the 75% pretraining split.
+sampled_cpu:
+  table: carbon.pilot_corpus_dedup
+  repo: AINovice2005/carbon-pilot-corpus-dedup
+  config: null
+  upstream: cpu_enriched
+  access_mode: catalog
+  description: Stratified CPU-enriched population used as the GPU input corpus. HF
+    artifact name contains 'dedup', but the lineage edge is deterministic per-row-hash
+    sampling with representativeness validation, not deduplication.
+tokenized:
+  table: carbon.tokenized_corpus
+  repo: AINovice2005/carbon-tokenized-corpus
+  config: null
+  upstream: sampled_cpu
+  access_mode: catalog
+  description: Model-ready tokenized input from the sampled CPU population.
+likelihood_stats:
+  table: carbon.likelihood_stats
+  repo: AINovice2005/carbon-likelihood-stats
+  config: null
+  upstream: tokenized
+  access_mode: catalog
+  description: Per-sequence model likelihood statistics from GPU enrichment.
+embeddings:
+  table: carbon.embeddings
+  repo: AINovice2005/carbon-embeddings
+  config: null
+  upstream: tokenized
+  access_mode: catalog
+  description: Model-derived sequence embeddings from GPU enrichment.

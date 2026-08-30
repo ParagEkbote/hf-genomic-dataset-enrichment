@@ -1,7 +1,7 @@
 {
   "location": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/tokenized_corpus",
-  "table-uuid": "e3301254-e55d-4453-8807-ff7a29e02bdb",
-  "last-updated-ms": 901925909,
+  "table-uuid": "2321270c-bf98-4659-ba4e-64d336d7b43b",
+  "last-updated-ms": 2586655764,
   "last-column-id": 9,
   "schemas": [
     {
@@ -86,7 +86,7 @@
     "write.data.path": "hf://datasets/AINovice2005/carbon-tokenized-corpus",
     "hf.dataset.repo": "AINovice2005/carbon-tokenized-corpus",
     "hf.dataset.config": "default",
-    "hf.dataset.revision": "d9f59ee1693ac4ee7263e86a9ddb3474226923d7",
+    "hf.dataset.revision": "67ed2aa3e23a8dc660ba0c2c5b7f25f9a07ab007",
     "hf.write.pattern": "{split}-{uuid}-iceberg.parquet",
     "hf.write.split": "train",
     "schema.name-mapping.default": "[{\"names\":[\"split\"],\"field-id\":1},{\"names\":[\"record_id\"],\"field-id\":2},{\"names\":[\"start\"],\"field-id\":3},{\"names\":[\"end\"],\"field-id\":4},{\"names\":[\"token_ids\"],\"field-id\":5,\"fields\":[{\"names\":[\"element\"],\"field-id\":8}]},{\"names\":[\"token_mask\"],\"field-id\":6,\"fields\":[{\"names\":[\"element\"],\"field-id\":9}]},{\"names\":[\"token_length\"],\"field-id\":7}]"
@@ -96,8 +96,8 @@
     {
       "snapshot-id": 1,
       "sequence-number": 0,
-      "timestamp-ms": 901925909,
-      "manifest-list": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/tokenized_corpus/metadata/snap-1-0-d0cd6438-835b-4a9b-aa4f-cfda21571e8c.avro",
+      "timestamp-ms": 2586655764,
+      "manifest-list": "file:///teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon-catalog/carbon/tokenized_corpus/metadata/snap-1-0-9066733f-3026-4eca-8747-a154858d9fc7.avro",
       "summary": {
         "operation": "append",
         "added-files-size": "5111767778",
