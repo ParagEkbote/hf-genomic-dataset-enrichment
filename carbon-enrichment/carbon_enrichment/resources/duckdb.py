@@ -1,30 +1,35 @@
-"""
-DuckDB resource for local Parquet datasets.
-
-Responsibilities
-----------------
-- Create and configure a local DuckDB connection.
-- Register local Parquet datasets as logical relations.
-- Execute analytical SQL.
-- Return compact query results to callers.
-- Provide schema inspection.
-- Record operation timing and throughput.
-
-This module intentionally contains no Phase 2/3/4 analytical logic.
-"""
-
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import duckdb
 
-from carbon_enrichment.resources.resource_logging import get_logger, timed_operation
+from carbon_enrichment.resources.resource_logging import (
+    get_logger,
+    timed_operation,
+)
 
 
 logger = get_logger("duckdb")
+
+
+# ----------------------------------------------------------------------
+# Local execution defaults
+# ----------------------------------------------------------------------
+
+DEFAULT_THREADS = max(
+    1,
+    (os.cpu_count() or 1) - 1,
+)
+
+DEFAULT_MEMORY_LIMIT = None
+
+DEFAULT_TEMP_DIRECTORY = Path(
+    "data/tmp/duckdb"
+)
 
 
 @dataclass(frozen=True)
@@ -32,9 +37,9 @@ class DuckDBConfig:
     """Configuration for a local DuckDB resource."""
 
     database_path: str | Path = ":memory:"
-    threads: int | None = None
-    memory_limit: str | None = None
-    temp_directory: str | Path | None = None
+    threads: int | None = DEFAULT_THREADS
+    memory_limit: str | None = DEFAULT_MEMORY_LIMIT
+    temp_directory: str | Path | None = DEFAULT_TEMP_DIRECTORY
     read_only: bool = False
 
 
@@ -42,8 +47,14 @@ class DuckDBResource:
     """
     Thin resource wrapper around a local DuckDB connection.
 
-    The resource provides access primitives only. Analytical logic
-    belongs in the derived layer.
+    Responsibilities:
+      - connection lifecycle
+      - DuckDB execution configuration
+      - Parquet view registration
+      - analytical query execution
+
+    Analytical logic belongs in consuming modules such as
+    distributions.py.
     """
 
     def __init__(
@@ -51,20 +62,24 @@ class DuckDBResource:
         config: DuckDBConfig | None = None,
     ) -> None:
         self.config = config or DuckDBConfig()
-        self._connection: duckdb.DuckDBPyConnection | None = None
-        self._registered_datasets: dict[str, Path] = {}
+
+        self._connection: (
+            duckdb.DuckDBPyConnection | None
+        ) = None
+
+        self._registered_datasets: dict[
+            str,
+            Path,
+        ] = {}
 
     # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
 
-    def get_connection(self) -> duckdb.DuckDBPyConnection:
-        """
-        Create and return the configured DuckDB connection.
-
-        The connection is created lazily and reused for the lifetime
-        of this resource instance.
-        """
+    def get_connection(
+        self,
+    ) -> duckdb.DuckDBPyConnection:
+        """Create and return the DuckDB connection, initializing once."""
         if self._connection is not None:
             return self._connection
 
@@ -72,9 +87,15 @@ class DuckDBResource:
             logger,
             "duckdb",
             "connection_initialize",
+            database=str(
+                self.config.database_path
+            ),
+            read_only=self.config.read_only,
         ):
             self._connection = duckdb.connect(
-                database=str(self.config.database_path),
+                database=str(
+                    self.config.database_path
+                ),
                 read_only=self.config.read_only,
             )
 
@@ -83,12 +104,14 @@ class DuckDBResource:
         return self._connection
 
     def _configure_connection(self) -> None:
-        """Apply resource-level DuckDB configuration."""
+        """Apply resource-level execution settings."""
         connection = self._require_connection()
 
         if self.config.threads is not None:
             if self.config.threads < 1:
-                raise ValueError("threads must be >= 1")
+                raise ValueError(
+                    "threads must be >= 1"
+                )
 
             connection.execute(
                 f"SET threads = {self.config.threads}"
@@ -101,9 +124,12 @@ class DuckDBResource:
             )
 
         if self.config.temp_directory is not None:
-            temp_directory = Path(
-                self.config.temp_directory
-            ).expanduser()
+            temp_directory = (
+                Path(
+                    self.config.temp_directory
+                )
+                .expanduser()
+            )
 
             temp_directory.mkdir(
                 parents=True,
@@ -114,16 +140,6 @@ class DuckDBResource:
                 "SET temp_directory = ?",
                 [str(temp_directory)],
             )
-
-        logger.info(
-            "connection_configured | database=%s | threads=%s | "
-            "memory_limit=%s | temp_directory=%s | read_only=%s",
-            self.config.database_path,
-            self.config.threads,
-            self.config.memory_limit,
-            self.config.temp_directory,
-            self.config.read_only,
-        )
 
     def close(self) -> None:
         """Close the DuckDB connection if it is open."""
@@ -144,9 +160,9 @@ class DuckDBResource:
 
     def __exit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: Any,
+        exc_type,
+        exc_value,
+        traceback,
     ) -> None:
         del exc_type, exc_value, traceback
         self.close()
@@ -160,36 +176,34 @@ class DuckDBResource:
         name: str,
         path: str | Path,
     ) -> None:
-        """
-        Register a local Parquet dataset as a DuckDB view.
-
-        Parameters
-        ----------
-        name:
-            Logical relation name, e.g. ``cpu``.
-        path:
-            Parquet file or directory/glob containing Parquet files.
-        """
+        """Register a source Parquet dataset as a DuckDB view."""
         self._validate_relation_name(name)
 
-        dataset_path = Path(path).expanduser()
+        dataset_path = (
+            Path(path)
+            .expanduser()
+        )
 
         if not dataset_path.exists():
             raise FileNotFoundError(
-                f"Parquet dataset does not exist: {dataset_path}"
+                f"Parquet dataset does not exist: "
+                f"{dataset_path}"
             )
 
         connection = self.get_connection()
 
-        parquet_expression = self._parquet_expression(
-            dataset_path
+        parquet_expression = (
+            self._parquet_expression(
+                dataset_path
+            )
         )
 
         with timed_operation(
             logger,
             "duckdb",
             "register_dataset",
-            metadata_name=name,
+            name=name,
+            path=str(dataset_path),
         ):
             connection.execute(
                 f"""
@@ -201,70 +215,66 @@ class DuckDBResource:
 
         self._registered_datasets[name] = dataset_path
 
-        logger.info(
-            "dataset_registered | name=%s | path=%s",
-            name,
-            dataset_path,
-        )
-
-    def register_all_datasets(
+    def register_enriched_glob(
         self,
-        datasets: dict[str, str | Path],
+        name: str,
+        directory: str | Path,
+        pattern: str = "batch_*.parquet",
     ) -> None:
         """
-        Register explicitly supplied datasets.
-
-        This is a convenience method. It does not discover datasets
-        automatically and does not open resources that were not supplied.
+        Register a directory of enriched batch Parquet files
+        as one DuckDB view.
         """
-        for name, path in datasets.items():
-            self.register_dataset(name, path)
+        self._validate_relation_name(name)
 
-    # ------------------------------------------------------------------
-    # Query / execution
-    # ------------------------------------------------------------------
+        directory = (
+            Path(directory)
+            .expanduser()
+        )
 
-    def query(
-        self,
-        sql: str,
-        parameters: list[Any] | tuple[Any, ...] | None = None,
-    ):
-        """
-        Execute a SQL query and return an Arrow-compatible result.
+        if not directory.exists():
+            raise FileNotFoundError(
+                f"Enriched output directory does not exist: "
+                f"{directory}"
+            )
 
-        The result is intentionally left as a DuckDB relation/result
-        object rather than automatically converting the full result
-        into pandas.
-        """
+        glob_path = str(
+            directory / pattern
+        )
+
         connection = self.get_connection()
 
         with timed_operation(
             logger,
             "duckdb",
-            "query",
-        ) as timing:
-            result = connection.execute(
-                sql,
-                parameters or [],
+            "register_enriched_glob",
+            name=name,
+            directory=str(directory),
+            pattern=pattern,
+        ):
+            connection.execute(
+                f"""
+                CREATE OR REPLACE VIEW "{name}" AS
+                SELECT *
+                FROM read_parquet(?)
+                """,
+                [glob_path],
             )
 
-        timing.metadata["rows_returned"] = self._safe_row_count(
-            result
-        )
+        self._registered_datasets[name] = directory
 
-        return result
+    # ------------------------------------------------------------------
+    # Query
+    # ------------------------------------------------------------------
 
     def query_arrow(
         self,
         sql: str,
-        parameters: list[Any] | tuple[Any, ...] | None = None,
+        parameters: list[Any]
+        | tuple[Any, ...]
+        | None = None,
     ):
-        """
-        Execute SQL and return the result as an Arrow table.
-
-        This should be used when the caller explicitly needs an
-        Arrow representation.
-        """
+        """Execute SQL and return the result as an Arrow table."""
         connection = self.get_connection()
 
         with timed_operation(
@@ -272,82 +282,32 @@ class DuckDBResource:
             "duckdb",
             "query_arrow",
         ) as timing:
-            result = connection.execute(
-                sql,
-                parameters or [],
-            ).fetch_arrow_table()
+            result = (
+                connection
+                .execute(
+                    sql,
+                    parameters or [],
+                )
+                .fetch_arrow_table()
+            )
 
-        timing.metadata["rows_returned"] = result.num_rows
+            timing.metadata[
+                "rows_returned"
+            ] = result.num_rows
 
         return result
 
-    def execute(
+    # ------------------------------------------------------------------
+    # Introspection
+    # ------------------------------------------------------------------
+
+    def registered_datasets(
         self,
-        sql: str,
-        parameters: list[Any] | tuple[Any, ...] | None = None,
-    ) -> duckdb.DuckDBPyConnection:
-        """
-        Execute SQL without forcing result materialization.
-        """
-        connection = self.get_connection()
-
-        with timed_operation(
-            logger,
-            "duckdb",
-            "execute",
-        ):
-            connection.execute(
-                sql,
-                parameters or [],
-            )
-
-        return connection
-
-    # ------------------------------------------------------------------
-    # Schema / metadata
-    # ------------------------------------------------------------------
-
-    def table_exists(self, name: str) -> bool:
-        """Return whether a registered relation exists."""
-        connection = self.get_connection()
-
-        result = connection.execute(
-            """
-            SELECT COUNT(*)
-            FROM information_schema.tables
-            WHERE table_name = ?
-            """,
-            [name],
-        ).fetchone()
-
-        return bool(result and result[0])
-
-    def describe_table(self, name: str):
-        """
-        Return the schema of a registered relation.
-
-        Analytical profiling such as null percentages,
-        distributions, and cardinality analysis belongs elsewhere.
-        """
-        if not self.table_exists(name):
-            raise ValueError(
-                f"DuckDB relation does not exist: {name}"
-            )
-
-        connection = self.get_connection()
-
-        with timed_operation(
-            logger,
-            "duckdb",
-            "describe_table",
-        ):
-            return connection.execute(
-                f'DESCRIBE "{name}"'
-            ).fetch_arrow_table()
-
-    def registered_datasets(self) -> dict[str, Path]:
-        """Return a copy of the currently registered datasets."""
-        return dict(self._registered_datasets)
+    ) -> dict[str, Path]:
+        """Return a copy of currently registered datasets."""
+        return dict(
+            self._registered_datasets
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -364,35 +324,30 @@ class DuckDBResource:
         return self._connection
 
     @staticmethod
-    def _validate_relation_name(name: str) -> None:
-        """
-        Validate logical relation names before interpolating them
-        into SQL identifiers.
-        """
+    def _validate_relation_name(
+        name: str,
+    ) -> None:
         if not name:
             raise ValueError(
                 "Dataset name cannot be empty."
             )
 
-        if not name.replace("_", "").isalnum():
+        if not name.replace(
+            "_",
+            "",
+        ).isalnum():
             raise ValueError(
-                f"Invalid DuckDB relation name: {name!r}"
+                f"Invalid DuckDB relation name: "
+                f"{name!r}"
             )
 
     @staticmethod
-    def _parquet_expression(path: Path) -> str:
-        """
-        Produce a SQL-safe Parquet path expression.
+    def _parquet_expression(
+        path: Path,
+    ) -> str:
+        escaped = str(path).replace(
+            "'",
+            "''",
+        )
 
-        DuckDB's read_parquet() accepts a string path or glob.
-        """
-        escaped = str(path).replace("'", "''")
         return f"'{escaped}'"
-
-    @staticmethod
-    def _safe_row_count(result: Any) -> int | None:
-        """Best-effort result cardinality without materializing data."""
-        try:
-            return result.rowcount
-        except Exception:
-            return None
