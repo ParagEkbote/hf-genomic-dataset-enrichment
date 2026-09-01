@@ -4,8 +4,7 @@ pretraining_corpus:
   config: null
   upstream: null
   access_mode: streaming
-  description: "Root source corpus (eukaryote_generator/train split). Streaming-only\
-    \ \u2014 never cataloged."
+  description: "Root source corpus (eukaryote_generator/train split). Streaming-only never cataloged."
 cpu_enriched:
   table: carbon.cpu_enriched_sequences
   repo: AINovice2005/carbon-cpu-enriched-sequences
