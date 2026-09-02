@@ -1,5 +1,3 @@
-
-
 import fnmatch
 import json
 import os
@@ -24,7 +22,7 @@ DEFAULT_THREADS = max(
     (os.cpu_count() or 1) - 1,
 )
 
-DEFAULT_BINARY = "/teamspace/studios/this_studio/hf-genomic-dataset-enrichment/clickhouse"
+DEFAULT_BINARY = "/teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/clickhouse"
 
 DEFAULT_TEMP_DIRECTORY = Path(
     "data/tmp/clickhouse"
