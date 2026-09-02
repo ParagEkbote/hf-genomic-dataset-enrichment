@@ -1,30 +1,9 @@
-"""
-Qdrant resource for local vector storage and retrieval.
-
-Responsibilities
-----------------
-- Initialize a local Qdrant client.
-- Create/configure collections.
-- Bulk ingest vector points.
-- Inspect collection state.
-- Execute vector queries.
-- Retrieve stored points.
-
-This module intentionally contains no biological or Phase 3/4
-analysis logic.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
 from qdrant_client import QdrantClient, models
-
-from carbon_enrichment.resources.resource_logging import get_logger, timed_operation
-
-
-logger = get_logger("qdrant")
 
 
 @dataclass(frozen=True)
@@ -39,7 +18,8 @@ class QdrantConfig:
     vector_size: int | None = None
     distance: models.Distance = models.Distance.COSINE
 
-    timeout: float | None = None
+    # Qdrant client HTTP timeout, in seconds.
+    timeout: float | None = 300.0
 
     prefer_grpc: bool = False
 
@@ -48,7 +28,9 @@ class QdrantResource:
     """
     Thin resource wrapper around a Qdrant client.
 
-    The resource manages storage and retrieval primitives only.
+    The resource provides storage and retrieval primitives only.
+    Biological interpretation and derived metrics belong in the
+    derived analysis layer.
     """
 
     def __init__(
@@ -69,14 +51,7 @@ class QdrantResource:
         The client is initialized lazily and reused for the lifetime
         of this resource instance.
         """
-        if self._client is not None:
-            return self._client
-
-        with timed_operation(
-            logger,
-            "qdrant",
-            "client_initialize",
-        ):
+        if self._client is None:
             self._client = QdrantClient(
                 url=self.config.url,
                 api_key=self.config.api_key,
@@ -91,13 +66,8 @@ class QdrantResource:
         if self._client is None:
             return
 
-        with timed_operation(
-            logger,
-            "qdrant",
-            "client_close",
-        ):
-            self._client.close()
-            self._client = None
+        self._client.close()
+        self._client = None
 
     def __enter__(self) -> QdrantResource:
         self.get_client()
@@ -120,6 +90,7 @@ class QdrantResource:
         collection_name: str | None = None,
     ) -> bool:
         """Return whether a collection exists."""
+
         client = self.get_client()
 
         name = collection_name or self.config.collection_name
@@ -140,6 +111,7 @@ class QdrantResource:
 
         Existing collections are left unchanged.
         """
+
         client = self.get_client()
 
         name = collection_name or self.config.collection_name
@@ -155,35 +127,14 @@ class QdrantResource:
         metric = distance or self.config.distance
 
         if self.collection_exists(name):
-            logger.info(
-                "collection_exists | name=%s",
-                name,
-            )
             return
 
-        with timed_operation(
-            logger,
-            "qdrant",
-            "collection_create",
-            count=0,
-            unit="vectors",
-            collection=name,
-            vector_size=size,
-            distance=metric.value,
-        ):
-            client.create_collection(
-                collection_name=name,
-                vectors_config=models.VectorParams(
-                    size=size,
-                    distance=metric,
-                ),
-            )
-
-        logger.info(
-            "collection_created | name=%s | vector_size=%s | distance=%s",
-            name,
-            size,
-            metric.value,
+        client.create_collection(
+            collection_name=name,
+            vectors_config=models.VectorParams(
+                size=size,
+                distance=metric,
+            ),
         )
 
     def get_collection_info(
@@ -193,19 +144,14 @@ class QdrantResource:
         """
         Return Qdrant collection information.
         """
+
         client = self.get_client()
 
         name = collection_name or self.config.collection_name
 
-        with timed_operation(
-            logger,
-            "qdrant",
-            "collection_info",
-            collection=name,
-        ):
-            return client.get_collection(
-                collection_name=name,
-            )
+        return client.get_collection(
+            collection_name=name,
+        )
 
     # ------------------------------------------------------------------
     # Ingestion
@@ -219,30 +165,18 @@ class QdrantResource:
         wait: bool = True,
     ):
         """
-        Upsert a batch of points into the collection.
-
-        This method is intended for explicit batches. For large-scale
-        ingestion, prefer upload_points().
+        Upsert an explicit batch of points into the collection.
         """
+
         client = self.get_client()
 
         name = collection_name or self.config.collection_name
 
-        with timed_operation(
-            logger,
-            "qdrant",
-            "bulk_upsert",
-            count=len(points),
-            unit="vectors",
-            collection=name,
-        ):
-            result = client.upsert(
-                collection_name=name,
-                points=list(points),
-                wait=wait,
-            )
-
-        return result
+        return client.upsert(
+            collection_name=name,
+            points=list(points),
+            wait=wait,
+        )
 
     def upload_points(
         self,
@@ -255,34 +189,25 @@ class QdrantResource:
         wait: bool = True,
     ) -> None:
         """
-        Upload an iterable of points using Qdrant client's bulk
-        upload facilities.
+        Upload an iterable of points using Qdrant's bulk upload
+        facilities.
 
-        The iterable may be generated lazily so that the complete
+        The iterable may be generated lazily, so the complete
         embedding corpus does not need to reside in memory.
         """
+
         client = self.get_client()
 
         name = collection_name or self.config.collection_name
 
-        with timed_operation(
-            logger,
-            "qdrant",
-            "bulk_upload",
-            unit="vectors",
-            collection=name,
+        client.upload_points(
+            collection_name=name,
+            points=points,
             batch_size=batch_size,
             parallel=parallel,
             max_retries=max_retries,
-        ):
-            client.upload_points(
-                collection_name=name,
-                points=points,
-                batch_size=batch_size,
-                parallel=parallel,
-                max_retries=max_retries,
-                wait=wait,
-            )
+            wait=wait,
+        )
 
     # ------------------------------------------------------------------
     # Collection inspection
@@ -297,20 +222,15 @@ class QdrantResource:
         """
         Return the number of points in a collection.
         """
+
         client = self.get_client()
 
         name = collection_name or self.config.collection_name
 
-        with timed_operation(
-            logger,
-            "qdrant",
-            "count_points",
-            collection=name,
-        ):
-            result = client.count(
-                collection_name=name,
-                exact=exact,
-            )
+        result = client.count(
+            collection_name=name,
+            exact=exact,
+        )
 
         return result.count
 
@@ -332,32 +252,23 @@ class QdrantResource:
         """
         Search for nearest vectors.
 
-        Returns Qdrant query results without biological interpretation.
+        Returns raw Qdrant query results. Biological interpretation
+        belongs in the derived analysis layer.
         """
+
         client = self.get_client()
 
         name = collection_name or self.config.collection_name
 
-        with timed_operation(
-            logger,
-            "qdrant",
-            "vector_search",
-            count=1,
-            unit="query",
-            collection=name,
-            top_k=limit,
-        ) as timing:
-            result = client.query_points(
-                collection_name=name,
-                query=list(vector),
-                query_filter=query_filter,
-                limit=limit,
-                score_threshold=score_threshold,
-                with_payload=with_payload,
-                with_vectors=with_vectors,
-            )
-
-        timing.metadata["results"] = len(result.points)
+        result = client.query_points(
+            collection_name=name,
+            query=list(vector),
+            query_filter=query_filter,
+            limit=limit,
+            score_threshold=score_threshold,
+            with_payload=with_payload,
+            with_vectors=with_vectors,
+        )
 
         return result.points
 
@@ -372,21 +283,14 @@ class QdrantResource:
         """
         Retrieve specific points by ID.
         """
+
         client = self.get_client()
 
         name = collection_name or self.config.collection_name
 
-        with timed_operation(
-            logger,
-            "qdrant",
-            "retrieve_points",
-            count=len(point_ids),
-            unit="points",
-            collection=name,
-        ):
-            return client.retrieve(
-                collection_name=name,
-                ids=list(point_ids),
-                with_payload=with_payload,
-                with_vectors=with_vectors,
-            )
+        return client.retrieve(
+            collection_name=name,
+            ids=list(point_ids),
+            with_payload=with_payload,
+            with_vectors=with_vectors,
+        )
