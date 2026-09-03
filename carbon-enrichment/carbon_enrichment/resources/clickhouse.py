@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import fnmatch
 import json
 import os
@@ -28,7 +30,6 @@ DEFAULT_TEMP_DIRECTORY = Path(
     "data/tmp/clickhouse"
 )
 
-
 @dataclass(frozen=True)
 class ClickHouseConfig:
     """Configuration for a local `clickhouse local` resource."""
@@ -50,14 +51,11 @@ class ClickHouseResource:
       - registration of local Parquet datasets
       - registration of Hugging Face Parquet datasets without downloading them
       - HF shard discovery via the Hugging Face dataset API
-      - analytical query execution, returning Arrow tables/batches
+      - analytical query execution, returning Arrow tables/batches (either
+        fully materialized or streamed as record batches)
 
-    Hugging Face datasets are intentionally represented as ClickHouse `url()`
-    table-function expressions. ClickHouse therefore reads the remote Parquet
-    shards lazily/streamingly rather than materializing the complete dataset in
-    Python or on local disk.
-
-    Analytical logic belongs in consuming modules such as `distributions.py`.
+    Analytical logic belongs in consuming modules such as `distributions.py`
+    or `case_study.py`.
     """
 
     def __init__(
@@ -229,15 +227,16 @@ class ClickHouseResource:
         the resulting shard list is compressed into a ClickHouse brace
         expression where possible.
 
+        NOTE: every query against this source reads the matched remote
+        Parquet shards over HTTP. This resource deliberately does not stage
+        or persist a local dataset cache.
+
         Example:
             register_hf_dataset(
                 "cpu",
                 "https://huggingface.co/datasets/AINovice2005/"
                 "carbon-pilot-corpus-dedup/resolve/main/*.parquet",
             )
-
-        ClickHouse then reads the remote Parquet shards as needed during the
-        query.
         """
         self._validate_relation_name(name)
 
@@ -540,7 +539,17 @@ class ClickHouseResource:
         parameters: list[Any] | tuple[Any, ...] | None = None,
         extra_args: list[str] | None = None,
     ) -> pa.Table:
-        """Execute SQL and return the full result as an Arrow table."""
+        """
+        Execute SQL and return the full result as an Arrow table.
+
+        This fully buffers the result: once inside the `clickhouse local`
+        child process (building the Arrow-format output), once in the
+        pipe buffer captured by `subprocess.run`, and once more as the
+        materialized `pa.Table`. Fine for small/aggregate results
+        (summaries, top-N, correlations); for a large row-level result,
+        prefer `stream_arrow_batches` and write batches out incrementally
+        instead of calling this.
+        """
         final_sql = self._substitute_parameters(sql, parameters)
 
         cmd = self._base_args(extra_args) + [
@@ -576,10 +585,13 @@ class ClickHouseResource:
     ):
         """
         Execute SQL and stream Arrow record batches without materializing the
-        whole result.
+        whole result in this process's memory at once.
 
         Uses ClickHouse's ArrowStream output format, piped directly into
-        PyArrow's streaming reader.
+        PyArrow's streaming reader. Prefer this over `query_arrow` for any
+        query whose result could be large (row-level analytical output,
+        not aggregate summaries) — peak Python-side memory is bounded by
+        one batch rather than the full result set.
         """
         final_sql = self._substitute_parameters(sql, parameters)
 
