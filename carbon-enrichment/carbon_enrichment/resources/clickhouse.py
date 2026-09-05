@@ -33,7 +33,6 @@ DEFAULT_TEMP_DIRECTORY = Path(
 @dataclass(frozen=True)
 class ClickHouseConfig:
     """Configuration for a local `clickhouse local` resource."""
-
     binary_path: str = DEFAULT_BINARY
     threads: int | None = DEFAULT_THREADS
     temp_directory: str | Path | None = DEFAULT_TEMP_DIRECTORY
@@ -421,41 +420,7 @@ class ClickHouseResource:
         if len(urls) == 1:
             return urls[0]
 
-        parsed = [urlparse(u) for u in urls]
-        names = [Path(p.path).name for p in parsed]
-
-        matches = [
-            re.fullmatch(r"shard-(\d+)\.parquet", name)
-            for name in names
-        ]
-
-        if not all(matches):
-            return "{" + ",".join(urls) + "}"
-
-        numbers = [int(m.group(1)) for m in matches if m is not None]
-
-        if any(p.scheme != parsed[0].scheme or p.netloc != parsed[0].netloc
-               for p in parsed):
-            return "{" + ",".join(urls) + "}"
-
-        base = urls[0].rsplit(names[0], 1)[0]
-        width = len(matches[0].group(1))  # type: ignore[union-attr]
-
-        contiguous = numbers == list(
-            range(numbers[0], numbers[-1] + 1)
-        )
-
-        if contiguous:
-            return (
-                f"{base}shard-"
-                f"{{{numbers[0]:0{width}d}..{numbers[-1]:0{width}d}}}.parquet"
-            )
-
-        names_text = ",".join(
-            f"{number:0{width}d}"
-            for number in numbers
-        )
-        return f"{base}shard-{{{names_text}}}.parquet"
+        return "{" + ",".join(urls) + "}"
 
     @staticmethod
     def _is_hf_dataset_url(url: str) -> bool:
