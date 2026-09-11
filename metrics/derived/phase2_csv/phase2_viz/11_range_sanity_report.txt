@@ -1,0 +1,9 @@
+PHASE 2 RANGE SANITY REPORT
+============================================================
+
+Total rows checked: 32,410,000
+
+Homopolymer exceeds sequence length: 0 (0.000000%)
+GC content outside [0, 1]: 0 (0.000000%)
+Implausible Tm estimate: 147 (0.000454%)
+Negative CpG odds: 0 (0.000000%)

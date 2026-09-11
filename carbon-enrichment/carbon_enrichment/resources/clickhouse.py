@@ -6,10 +6,12 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from pathlib import PurePosixPath
 from urllib.request import Request, urlopen
 
 import pyarrow as pa
@@ -517,30 +519,44 @@ class ClickHouseResource:
         """
         final_sql = self._substitute_parameters(sql, parameters)
 
-        cmd = self._base_args(extra_args) + [
-            "--query",
-            final_sql,
-            "--format",
-            "Arrow",
-        ]
+        final_sql = f"""
+        {final_sql}
+        FORMAT Arrow
+        """
 
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=None,
-        )
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".sql",
+            encoding="utf-8",
+            delete=False,
+        ) as f:
+            f.write(final_sql)
+            query_file = f.name
 
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"clickhouse local query failed with exit code "
-                f"{result.returncode}"
+        try:
+            cmd = self._base_args(extra_args) + [
+                "--queries-file",
+                query_file,
+            ]
+
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=None,
             )
 
-        table = pa.ipc.open_file(
-            pa.BufferReader(result.stdout)
-        ).read_all()
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"clickhouse local query failed with exit code "
+                    f"{result.returncode}"
+                )
 
-        return table
+            return pa.ipc.open_file(
+                pa.BufferReader(result.stdout)
+            ).read_all()
+
+        finally:
+            Path(query_file).unlink(missing_ok=True)
 
     def stream_arrow_batches(
         self,

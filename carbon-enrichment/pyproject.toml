@@ -49,6 +49,10 @@ dependencies = [
     "polars",
     "numba",
     "lancedb",
+    "seaborn",
+    "matplotlib",
+    "plotly",
+    "scipy",
 ]
 
 
