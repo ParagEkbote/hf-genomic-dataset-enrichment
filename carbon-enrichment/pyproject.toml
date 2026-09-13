@@ -52,7 +52,9 @@ dependencies = [
     "seaborn",
     "matplotlib",
     "plotly",
+    "marimo",
     "scipy",
+    "scikit-learn",
 ]
 
 
