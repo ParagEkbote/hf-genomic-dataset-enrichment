@@ -37,9 +37,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datasets import load_dataset
-
+from plotly.subplots import make_subplots
 
 # ============================================================
 # CONFIGURATION
@@ -79,6 +78,7 @@ LOG_MAGNITUDE_NBINS = 80
 # 1. STREAM DATASET AND FIND TARGET
 # ============================================================
 
+
 def find_target_embedding():
 
     print("=" * 80)
@@ -105,7 +105,6 @@ def find_target_embedding():
     rows_scanned = 0
 
     for row in ds:
-
         rows_scanned += 1
 
         if SHOW_PROGRESS and rows_scanned % 10_000 == 0:
@@ -125,7 +124,6 @@ def find_target_embedding():
     print()
 
     if target is None:
-
         raise RuntimeError(
             "\nTarget embedding was not found.\n"
             f"record_id = {TARGET_RECORD_ID}\n"
@@ -133,10 +131,7 @@ def find_target_embedding():
             f"end       = {TARGET_END}\n"
         )
 
-    print(
-        f"Target found after scanning "
-        f"{rows_scanned:,} rows."
-    )
+    print(f"Target found after scanning {rows_scanned:,} rows.")
 
     return target
 
@@ -144,6 +139,7 @@ def find_target_embedding():
 # ============================================================
 # 2. PREPARE EMBEDDING
 # ============================================================
+
 
 def prepare_embedding(target):
 
@@ -153,11 +149,7 @@ def prepare_embedding(target):
     )
 
     if embedding.ndim != 1:
-
-        raise ValueError(
-            f"Expected 1-D embedding, "
-            f"got shape {embedding.shape}"
-        )
+        raise ValueError(f"Expected 1-D embedding, got shape {embedding.shape}")
 
     dimensions = embedding.size
 
@@ -170,20 +162,13 @@ def prepare_embedding(target):
     print(f"start           : {int(target['start']):,}")
     print(f"end             : {int(target['end']):,}")
 
-    print(
-        f"corpus span     : "
-        f"{int(target['end']) - int(target['start']):,}"
-    )
+    print(f"corpus span     : {int(target['end']) - int(target['start']):,}")
 
     print(f"embedding dims  : {dimensions:,}")
 
-    print(
-        f"embedding_norm  : "
-        f"{target['embedding_norm']}"
-    )
+    print(f"embedding_norm  : {target['embedding_norm']}")
 
     if dimensions != EXPECTED_DIMENSIONS:
-
         print()
         print(
             f"WARNING: expected "
@@ -192,11 +177,7 @@ def prepare_embedding(target):
         )
 
     else:
-
-        print(
-            f"Dimension check : "
-            f"OK ({EXPECTED_DIMENSIONS:,})"
-        )
+        print(f"Dimension check : OK ({EXPECTED_DIMENSIONS:,})")
 
     return embedding
 
@@ -205,100 +186,60 @@ def prepare_embedding(target):
 # 3. STATISTICS
 # ============================================================
 
+
 def calculate_statistics(embedding):
 
     abs_values = np.abs(embedding)
 
-    largest_indices = np.argsort(
-        abs_values
-    )[::-1][:20]
+    largest_indices = np.argsort(abs_values)[::-1][:20]
 
     stats = {
-
-        "dimensions":
-            int(embedding.size),
-
-        "min":
-            float(np.min(embedding)),
-
-        "max":
-            float(np.max(embedding)),
-
-        "mean":
-            float(np.mean(embedding)),
-
-        "std":
-            float(np.std(embedding)),
-
-        "median":
-            float(np.median(embedding)),
-
-        "l2_norm_calculated":
-            float(np.linalg.norm(embedding)),
-
-        "l1_norm":
-            float(np.sum(abs_values)),
-
-        "q01":
-            float(np.percentile(embedding, 1)),
-
-        "q05":
-            float(np.percentile(embedding, 5)),
-
-        "q25":
-            float(np.percentile(embedding, 25)),
-
-        "q75":
-            float(np.percentile(embedding, 75)),
-
-        "q95":
-            float(np.percentile(embedding, 95)),
-
-        "q99":
-            float(np.percentile(embedding, 99)),
-
-        "zero_fraction":
-            float(np.mean(embedding == 0)),
-
-        "abs_gt_1":
-            int(np.sum(abs_values > 1)),
-
-        "abs_gt_5":
-            int(np.sum(abs_values > 5)),
-
-        "abs_gt_10":
-            int(np.sum(abs_values > 10)),
-
+        "dimensions": int(embedding.size),
+        "min": float(np.min(embedding)),
+        "max": float(np.max(embedding)),
+        "mean": float(np.mean(embedding)),
+        "std": float(np.std(embedding)),
+        "median": float(np.median(embedding)),
+        "l2_norm_calculated": float(np.linalg.norm(embedding)),
+        "l1_norm": float(np.sum(abs_values)),
+        "q01": float(np.percentile(embedding, 1)),
+        "q05": float(np.percentile(embedding, 5)),
+        "q25": float(np.percentile(embedding, 25)),
+        "q75": float(np.percentile(embedding, 75)),
+        "q95": float(np.percentile(embedding, 95)),
+        "q99": float(np.percentile(embedding, 99)),
+        "zero_fraction": float(np.mean(embedding == 0)),
+        "abs_gt_1": int(np.sum(abs_values > 1)),
+        "abs_gt_5": int(np.sum(abs_values > 5)),
+        "abs_gt_10": int(np.sum(abs_values > 10)),
         # Exact-zero and near-zero diagnostics.
-        "exact_zero_count":
-            int(np.sum(embedding == 0)),
-        "exact_zero_fraction":
-            float(np.mean(embedding == 0)),
-        "abs_lt_1e-3_count":
-            int(np.sum(abs_values < 1e-3)),
-        "abs_lt_1e-2_count":
-            int(np.sum(abs_values < 1e-2)),
-        "abs_lt_5e-2_count":
-            int(np.sum(abs_values < 5e-2)),
-        "abs_lt_1e-1_count":
-            int(np.sum(abs_values < 1e-1)),
-
+        "exact_zero_count": int(np.sum(embedding == 0)),
+        "exact_zero_fraction": float(np.mean(embedding == 0)),
+        "abs_lt_1e-3_count": int(np.sum(abs_values < 1e-3)),
+        "abs_lt_1e-2_count": int(np.sum(abs_values < 1e-2)),
+        "abs_lt_5e-2_count": int(np.sum(abs_values < 5e-2)),
+        "abs_lt_1e-1_count": int(np.sum(abs_values < 1e-1)),
         # Squared-magnitude (L2-energy) concentration.
-        "top_10_l2_energy_fraction":
-            float(np.sum(np.sort(embedding ** 2)[-10:]) /
-                  max(np.sum(embedding ** 2), np.finfo(float).eps)),
-        "top_50_l2_energy_fraction":
-            float(np.sum(np.sort(embedding ** 2)[-50:]) /
-                  max(np.sum(embedding ** 2), np.finfo(float).eps)),
-        "top_100_l2_energy_fraction":
-            float(np.sum(np.sort(embedding ** 2)[-100:]) /
-                  max(np.sum(embedding ** 2), np.finfo(float).eps)),
-        "top_250_l2_energy_fraction":
-            float(np.sum(np.sort(embedding ** 2)[-250:]) /
-                  max(np.sum(embedding ** 2), np.finfo(float).eps)),
-        "top_500_l2_energy_fraction":
-            float(np.sum(np.sort(embedding ** 2)[-500:]) /
-                  max(np.sum(embedding ** 2), np.finfo(float).eps)),
+        "top_10_l2_energy_fraction": float(
+            np.sum(np.sort(embedding**2)[-10:])
+            / max(np.sum(embedding**2), np.finfo(float).eps)
+        ),
+        "top_50_l2_energy_fraction": float(
+            np.sum(np.sort(embedding**2)[-50:])
+            / max(np.sum(embedding**2), np.finfo(float).eps)
+        ),
+        "top_100_l2_energy_fraction": float(
+            np.sum(np.sort(embedding**2)[-100:])
+            / max(np.sum(embedding**2), np.finfo(float).eps)
+        ),
+        "top_250_l2_energy_fraction": float(
+            np.sum(np.sort(embedding**2)[-250:])
+            / max(np.sum(embedding**2), np.finfo(float).eps)
+        ),
+        "top_500_l2_energy_fraction": float(
+            np.sum(np.sort(embedding**2)[-500:])
+            / max(np.sum(embedding**2), np.finfo(float).eps)
+        ),
     }
 
     print()
@@ -320,7 +261,6 @@ def calculate_statistics(embedding):
         largest_indices,
         start=1,
     ):
-
         dimension = int(idx + 1)
         value = float(embedding[idx])
 
@@ -334,10 +274,7 @@ def calculate_statistics(embedding):
         )
 
         print(
-            f"{rank:2d}. "
-            f"dimension {dimension:4d} : "
-            f"{value: .6f} "
-            f"|abs|={abs(value):.6f}"
+            f"{rank:2d}. dimension {dimension:4d} : {value: .6f} |abs|={abs(value):.6f}"
         )
 
     return stats, top_rows
@@ -346,6 +283,7 @@ def calculate_statistics(embedding):
 # ============================================================
 # 4. PER-DIMENSION DATA
 # ============================================================
+
 
 def create_dimension_dataframe(embedding):
 
@@ -359,30 +297,20 @@ def create_dimension_dataframe(embedding):
     abs_values = np.abs(values)
 
     # Rank by absolute magnitude.
-    magnitude_order = np.argsort(
-        -abs_values
-    )
+    magnitude_order = np.argsort(-abs_values)
 
     magnitude_rank = np.empty(
         len(values),
         dtype=int,
     )
 
-    magnitude_rank[
-        magnitude_order
-    ] = np.arange(
+    magnitude_rank[magnitude_order] = np.arange(
         1,
         len(values) + 1,
     )
 
     # Percentile rank based on absolute magnitude.
-    percentile = (
-        np.argsort(
-            np.argsort(abs_values)
-        )
-        / max(len(values) - 1, 1)
-        * 100
-    )
+    percentile = np.argsort(np.argsort(abs_values)) / max(len(values) - 1, 1) * 100
 
     df = pd.DataFrame(
         {
@@ -401,16 +329,14 @@ def create_dimension_dataframe(embedding):
 # 5. SAVE CSV OUTPUTS
 # ============================================================
 
+
 def save_outputs(
     stats,
     top_rows,
     dimension_df,
 ):
 
-    stats_path = (
-        OUTPUT_DIR /
-        "embedding_statistics.csv"
-    )
+    stats_path = OUTPUT_DIR / "embedding_statistics.csv"
 
     stats_df = pd.DataFrame(
         [
@@ -427,20 +353,14 @@ def save_outputs(
         index=False,
     )
 
-    top_path = (
-        OUTPUT_DIR /
-        "top_embedding_dimensions.csv"
-    )
+    top_path = OUTPUT_DIR / "top_embedding_dimensions.csv"
 
     pd.DataFrame(top_rows).to_csv(
         top_path,
         index=False,
     )
 
-    dimensions_path = (
-        OUTPUT_DIR /
-        "embedding_dimensions.csv"
-    )
+    dimensions_path = OUTPUT_DIR / "embedding_dimensions.csv"
 
     dimension_df.to_csv(
         dimensions_path,
@@ -448,25 +368,17 @@ def save_outputs(
     )
 
     print()
-    print(
-        f"Saved statistics     : "
-        f"{stats_path}"
-    )
+    print(f"Saved statistics     : {stats_path}")
 
-    print(
-        f"Saved top dimensions : "
-        f"{top_path}"
-    )
+    print(f"Saved top dimensions : {top_path}")
 
-    print(
-        f"Saved dimension data : "
-        f"{dimensions_path}"
-    )
+    print(f"Saved dimension data : {dimensions_path}")
 
 
 # ============================================================
 # 6. RAW EMBEDDING FINGERPRINT
 # ============================================================
+
 
 def create_embedding_heatmap(
     embedding,
@@ -482,54 +394,36 @@ def create_embedding_heatmap(
 
     fig.add_trace(
         go.Heatmap(
-
             z=[embedding],
-
             x=dimensions,
-
             y=["Embedding"],
-
             colorscale="RdBu_r",
-
             zmid=0,
-
             colorbar=dict(
                 title="Value",
             ),
-
-            hovertemplate=(
-                "Dimension: %{x}<br>"
-                "Value: %{z:.6f}"
-                "<extra></extra>"
-            ),
+            hovertemplate=("Dimension: %{x}<br>Value: %{z:.6f}<extra></extra>"),
         )
     )
 
     fig.update_layout(
-
         title=(
             f"Embedding Fingerprint — "
             f"{target['record_id']} "
             f"| {len(embedding):,} dimensions"
         ),
-
         xaxis=dict(
             title="Embedding dimension",
-
             rangeslider=dict(
                 visible=True,
             ),
         ),
-
         yaxis=dict(
             title="",
             showticklabels=False,
         ),
-
         template="plotly_white",
-
         height=360,
-
         margin=dict(
             l=70,
             r=70,
@@ -538,10 +432,7 @@ def create_embedding_heatmap(
         ),
     )
 
-    output = (
-        OUTPUT_DIR /
-        "embedding_fingerprint.html"
-    )
+    output = OUTPUT_DIR / "embedding_fingerprint.html"
 
     fig.write_html(
         output,
@@ -549,10 +440,7 @@ def create_embedding_heatmap(
         auto_open=False,
     )
 
-    print(
-        f"Saved fingerprint    : "
-        f"{output}"
-    )
+    print(f"Saved fingerprint    : {output}")
 
     return fig
 
@@ -560,6 +448,7 @@ def create_embedding_heatmap(
 # ============================================================
 # 7. IMPROVED DIMENSION PROFILE
 # ============================================================
+
 
 def create_dimension_profile(
     embedding,
@@ -575,24 +464,14 @@ def create_dimension_profile(
 
     fig.add_trace(
         go.Scattergl(
-
             x=dimensions,
-
             y=embedding,
-
             mode="lines",
-
             name="Embedding",
-
             line=dict(
                 width=1.2,
             ),
-
-            hovertemplate=(
-                "<b>Dimension %{x}</b><br>"
-                "Value: %{y:.6f}"
-                "<extra></extra>"
-            ),
+            hovertemplate=("<b>Dimension %{x}</b><br>Value: %{y:.6f}<extra></extra>"),
         )
     )
 
@@ -603,30 +482,19 @@ def create_dimension_profile(
     )
 
     fig.update_layout(
-
-        title=(
-            f"Embedding Dimension Profile — "
-            f"{target['record_id']}"
-        ),
-
+        title=(f"Embedding Dimension Profile — {target['record_id']}"),
         xaxis=dict(
             title="Embedding dimension",
-
             rangeslider=dict(
                 visible=True,
             ),
         ),
-
         yaxis=dict(
             title="Embedding value",
         ),
-
         template="plotly_white",
-
         hovermode="x unified",
-
         height=560,
-
         margin=dict(
             l=80,
             r=60,
@@ -635,10 +503,7 @@ def create_dimension_profile(
         ),
     )
 
-    output = (
-        OUTPUT_DIR /
-        "embedding_dimension_profile.html"
-    )
+    output = OUTPUT_DIR / "embedding_dimension_profile.html"
 
     fig.write_html(
         output,
@@ -646,10 +511,7 @@ def create_dimension_profile(
         auto_open=False,
     )
 
-    print(
-        f"Saved dimension plot: "
-        f"{output}"
-    )
+    print(f"Saved dimension plot: {output}")
 
     return fig
 
@@ -657,6 +519,7 @@ def create_dimension_profile(
 # ============================================================
 # 8. BUILD 3D SPHERICAL FINGERPRINT
 # ============================================================
+
 
 def spherical_coordinates(
     embedding,
@@ -670,14 +533,9 @@ def spherical_coordinates(
     #
     # This produces an approximately uniform
     # angular distribution on a sphere.
-    golden_angle = np.pi * (
-        3.0 - np.sqrt(5.0)
-    )
+    golden_angle = np.pi * (3.0 - np.sqrt(5.0))
 
-    y = (
-        1
-        - 2 * indices / max(n - 1, 1)
-    )
+    y = 1 - 2 * indices / max(n - 1, 1)
 
     radius_xy = np.sqrt(
         np.maximum(
@@ -686,19 +544,11 @@ def spherical_coordinates(
         )
     )
 
-    theta = (
-        golden_angle * indices
-    )
+    theta = golden_angle * indices
 
-    sphere_x = (
-        radius_xy *
-        np.cos(theta)
-    )
+    sphere_x = radius_xy * np.cos(theta)
 
-    sphere_z = (
-        radius_xy *
-        np.sin(theta)
-    )
+    sphere_z = radius_xy * np.sin(theta)
 
     sphere_y = y
 
@@ -715,11 +565,7 @@ def create_3d_fingerprint(
     dimension_df,
 ):
 
-    x_sphere, y_sphere, z_sphere = (
-        spherical_coordinates(
-            embedding
-        )
-    )
+    x_sphere, y_sphere, z_sphere = spherical_coordinates(embedding)
 
     abs_values = np.abs(embedding)
 
@@ -735,33 +581,20 @@ def create_3d_fingerprint(
         len(embedding),
     )
 
-    selected = np.argsort(
-        abs_values
-    )[::-1][:n_points]
+    selected = np.argsort(abs_values)[::-1][:n_points]
 
     selected = np.sort(selected)
 
     values = embedding[selected]
     magnitudes = abs_values[selected]
 
-    x = (
-        x_sphere[selected] *
-        magnitudes
-    )
+    x = x_sphere[selected] * magnitudes
 
-    y = (
-        y_sphere[selected] *
-        magnitudes
-    )
+    y = y_sphere[selected] * magnitudes
 
-    z = (
-        z_sphere[selected] *
-        magnitudes
-    )
+    z = z_sphere[selected] * magnitudes
 
-    dimensions = (
-        selected + 1
-    )
+    dimensions = selected + 1
 
     ranks = dimension_df.loc[
         selected,
@@ -777,41 +610,20 @@ def create_3d_fingerprint(
     # Marker size
     # --------------------------------------------------------
 
-    if np.max(magnitudes) == np.min(
-        magnitudes
-    ):
-
+    if np.max(magnitudes) == np.min(magnitudes):
         marker_sizes = np.full(
             len(magnitudes),
             MIN_MARKER_SIZE,
         )
 
     else:
-
-        scaled = (
-            (
-                magnitudes
-                - np.min(magnitudes)
-            )
-            /
-            (
-                np.max(magnitudes)
-                - np.min(magnitudes)
-            )
+        scaled = (magnitudes - np.min(magnitudes)) / (
+            np.max(magnitudes) - np.min(magnitudes)
         )
 
-        marker_sizes = (
-            MIN_MARKER_SIZE
-            +
-            scaled
-            * (
-                MAX_MARKER_SIZE
-                - MIN_MARKER_SIZE
-            )
-        )
+        marker_sizes = MIN_MARKER_SIZE + scaled * (MAX_MARKER_SIZE - MIN_MARKER_SIZE)
 
     hover_text = [
-
         (
             f"<b>Dimension {dim}</b><br>"
             f"Embedding value: {value:.6f}<br>"
@@ -821,9 +633,7 @@ def create_3d_fingerprint(
             f"{pct:.2f}%"
             f"<extra></extra>"
         )
-
-        for dim, value, magnitude, rank, pct
-        in zip(
+        for dim, value, magnitude, rank, pct in zip(
             dimensions,
             values,
             magnitudes,
@@ -840,42 +650,24 @@ def create_3d_fingerprint(
 
     fig.add_trace(
         go.Scatter3d(
-
             x=x,
             y=y,
             z=z,
-
             mode="markers",
-
             marker=dict(
-
                 size=marker_sizes,
-
                 color=values,
-
                 colorscale="RdBu_r",
-
-                cmin=float(
-                    np.min(embedding)
-                ),
-
-                cmax=float(
-                    np.max(embedding)
-                ),
-
+                cmin=float(np.min(embedding)),
+                cmax=float(np.max(embedding)),
                 cmid=0,
-
                 opacity=0.85,
-
                 colorbar=dict(
                     title="Signed<br>value",
                 ),
             ),
-
             text=hover_text,
-
             hovertemplate="%{text}",
-
             name="Embedding dimensions",
         )
     )
@@ -886,24 +678,16 @@ def create_3d_fingerprint(
 
     fig.add_trace(
         go.Scatter3d(
-
             x=[0],
             y=[0],
             z=[0],
-
             mode="markers",
-
             marker=dict(
                 size=5,
                 color="black",
             ),
-
             name="Origin",
-
-            hovertemplate=(
-                "<b>Origin</b>"
-                "<extra></extra>"
-            ),
+            hovertemplate=("<b>Origin</b><extra></extra>"),
         )
     )
 
@@ -912,9 +696,7 @@ def create_3d_fingerprint(
     # --------------------------------------------------------
 
     fig.update_layout(
-
         title=dict(
-
             text=(
                 f"3D Embedding Fingerprint — "
                 f"{target['record_id']}<br>"
@@ -923,30 +705,23 @@ def create_3d_fingerprint(
                 f"absolute magnitude"
                 f"</sup>"
             ),
-
             x=0.5,
             xanchor="center",
         ),
-
         scene=dict(
-
             xaxis=dict(
                 title="Fingerprint X",
                 showbackground=True,
             ),
-
             yaxis=dict(
                 title="Fingerprint Y",
                 showbackground=True,
             ),
-
             zaxis=dict(
                 title="Fingerprint Z",
                 showbackground=True,
             ),
-
             aspectmode="cube",
-
             camera=dict(
                 eye=dict(
                     x=1.6,
@@ -955,28 +730,21 @@ def create_3d_fingerprint(
                 )
             ),
         ),
-
         template="plotly_white",
-
         height=780,
-
         margin=dict(
             l=0,
             r=0,
             t=100,
             b=0,
         ),
-
         legend=dict(
             x=0.01,
             y=0.99,
         ),
     )
 
-    output = (
-        OUTPUT_DIR /
-        "embedding_3d_fingerprint.html"
-    )
+    output = OUTPUT_DIR / "embedding_3d_fingerprint.html"
 
     fig.write_html(
         output,
@@ -984,10 +752,7 @@ def create_3d_fingerprint(
         auto_open=False,
     )
 
-    print(
-        f"Saved 3D fingerprint: "
-        f"{output}"
-    )
+    print(f"Saved 3D fingerprint: {output}")
 
     return fig
 
@@ -996,17 +761,14 @@ def create_3d_fingerprint(
 # 9. 4D-STYLE FINGERPRINT
 # ============================================================
 
+
 def create_4d_fingerprint(
     embedding,
     target,
     dimension_df,
 ):
 
-    x_sphere, y_sphere, z_sphere = (
-        spherical_coordinates(
-            embedding
-        )
-    )
+    x_sphere, y_sphere, z_sphere = spherical_coordinates(embedding)
 
     abs_values = np.abs(embedding)
 
@@ -1015,9 +777,7 @@ def create_4d_fingerprint(
         len(embedding),
     )
 
-    selected = np.argsort(
-        abs_values
-    )[::-1][:n_points]
+    selected = np.argsort(abs_values)[::-1][:n_points]
 
     values = embedding[selected]
     magnitudes = abs_values[selected]
@@ -1026,20 +786,11 @@ def create_4d_fingerprint(
     # Radial coordinates
     # --------------------------------------------------------
 
-    x = (
-        x_sphere[selected]
-        * magnitudes
-    )
+    x = x_sphere[selected] * magnitudes
 
-    y = (
-        y_sphere[selected]
-        * magnitudes
-    )
+    y = y_sphere[selected] * magnitudes
 
-    z = (
-        z_sphere[selected]
-        * magnitudes
-    )
+    z = z_sphere[selected] * magnitudes
 
     dimensions = selected + 1
 
@@ -1058,27 +809,16 @@ def create_4d_fingerprint(
     # --------------------------------------------------------
 
     if np.ptp(magnitudes) == 0:
-
         marker_sizes = np.full(
             len(magnitudes),
             MIN_MARKER_SIZE,
         )
 
     else:
+        normalized = (magnitudes - np.min(magnitudes)) / np.ptp(magnitudes)
 
-        normalized = (
-            magnitudes
-            - np.min(magnitudes)
-        ) / np.ptp(magnitudes)
-
-        marker_sizes = (
-            MIN_MARKER_SIZE
-            +
-            normalized
-            * (
-                MAX_MARKER_SIZE
-                - MIN_MARKER_SIZE
-            )
+        marker_sizes = MIN_MARKER_SIZE + normalized * (
+            MAX_MARKER_SIZE - MIN_MARKER_SIZE
         )
 
     customdata = np.column_stack(
@@ -1106,43 +846,23 @@ def create_4d_fingerprint(
 
     fig.add_trace(
         go.Scatter3d(
-
             x=x,
             y=y,
             z=z,
-
             mode="markers",
-
             marker=dict(
-
                 size=marker_sizes,
-
                 color=values,
-
                 colorscale="RdBu_r",
-
-                cmin=float(
-                    np.min(embedding)
-                ),
-
-                cmax=float(
-                    np.max(embedding)
-                ),
-
+                cmin=float(np.min(embedding)),
+                cmax=float(np.max(embedding)),
                 cmid=0,
-
                 opacity=0.9,
-
                 colorbar=dict(
-                    title=(
-                        "Embedding<br>"
-                        "value"
-                    ),
+                    title=("Embedding<br>value"),
                 ),
             ),
-
             customdata=customdata,
-
             hovertemplate=(
                 "<b>Dimension %{customdata[0]}</b>"
                 "<br>"
@@ -1156,7 +876,6 @@ def create_4d_fingerprint(
                 "%{customdata[4]:.2f}%"
                 "<extra></extra>"
             ),
-
             name="Embedding",
         )
     )
@@ -1164,31 +883,21 @@ def create_4d_fingerprint(
     # Origin
     fig.add_trace(
         go.Scatter3d(
-
             x=[0],
             y=[0],
             z=[0],
-
             mode="markers",
-
             marker=dict(
                 size=5,
                 color="black",
             ),
-
             name="Origin",
-
-            hovertemplate=(
-                "<b>Origin</b>"
-                "<extra></extra>"
-            ),
+            hovertemplate=("<b>Origin</b><extra></extra>"),
         )
     )
 
     fig.update_layout(
-
         title=dict(
-
             text=(
                 f"Interactive 4D Embedding "
                 f"Fingerprint — "
@@ -1198,27 +907,20 @@ def create_4d_fingerprint(
                 f"+ magnitude size"
                 f"</sup>"
             ),
-
             x=0.5,
             xanchor="center",
         ),
-
         scene=dict(
-
             xaxis=dict(
                 title="X",
             ),
-
             yaxis=dict(
                 title="Y",
             ),
-
             zaxis=dict(
                 title="Z",
             ),
-
             aspectmode="cube",
-
             camera=dict(
                 eye=dict(
                     x=1.6,
@@ -1227,11 +929,8 @@ def create_4d_fingerprint(
                 )
             ),
         ),
-
         template="plotly_white",
-
         height=820,
-
         margin=dict(
             l=0,
             r=0,
@@ -1240,10 +939,7 @@ def create_4d_fingerprint(
         ),
     )
 
-    output = (
-        OUTPUT_DIR /
-        "embedding_4d_fingerprint.html"
-    )
+    output = OUTPUT_DIR / "embedding_4d_fingerprint.html"
 
     fig.write_html(
         output,
@@ -1251,10 +947,7 @@ def create_4d_fingerprint(
         auto_open=False,
     )
 
-    print(
-        f"Saved 4D fingerprint: "
-        f"{output}"
-    )
+    print(f"Saved 4D fingerprint: {output}")
 
     return fig
 
@@ -1262,6 +955,7 @@ def create_4d_fingerprint(
 # ============================================================
 # 10. DISTRIBUTION AND MAGNITUDE-CONCENTRATION VIEWS
 # ============================================================
+
 
 def create_distribution(
     embedding,
@@ -1275,12 +969,7 @@ def create_distribution(
         go.Histogram(
             x=embedding,
             nbinsx=FULL_RANGE_NBINS,
-            hovertemplate=(
-                "Embedding value: %{x:.6f}"
-                "<br>"
-                "Count: %{y}"
-                "<extra></extra>"
-            ),
+            hovertemplate=("Embedding value: %{x:.6f}<br>Count: %{y}<extra></extra>"),
             name="Embedding values",
         )
     )
@@ -1310,10 +999,7 @@ def create_distribution(
         ),
     )
 
-    output = (
-        OUTPUT_DIR /
-        "embedding_distribution.html"
-    )
+    output = OUTPUT_DIR / "embedding_distribution.html"
 
     fig.write_html(
         output,
@@ -1321,10 +1007,7 @@ def create_distribution(
         auto_open=False,
     )
 
-    print(
-        f"Saved distribution   : "
-        f"{output}"
-    )
+    print(f"Saved distribution   : {output}")
 
     return fig
 
@@ -1341,9 +1024,7 @@ def create_central_distribution(
     compressed by a few large-magnitude values.
     """
 
-    central = embedding[
-        np.abs(embedding) <= CENTRAL_RANGE
-    ]
+    central = embedding[np.abs(embedding) <= CENTRAL_RANGE]
 
     fig = go.Figure()
 
@@ -1351,12 +1032,7 @@ def create_central_distribution(
         go.Histogram(
             x=central,
             nbinsx=CENTRAL_RANGE_NBINS,
-            hovertemplate=(
-                "Embedding value: %{x:.6f}"
-                "<br>"
-                "Count: %{y}"
-                "<extra></extra>"
-            ),
+            hovertemplate=("Embedding value: %{x:.6f}<br>Count: %{y}<extra></extra>"),
             name="Central values",
         )
     )
@@ -1367,9 +1043,7 @@ def create_central_distribution(
         line_width=1,
     )
 
-    fraction = (
-        len(central) / max(len(embedding), 1) * 100
-    )
+    fraction = len(central) / max(len(embedding), 1) * 100
 
     fig.update_layout(
         title=(
@@ -1400,10 +1074,7 @@ def create_central_distribution(
         ),
     )
 
-    output = (
-        OUTPUT_DIR /
-        "embedding_distribution_central.html"
-    )
+    output = OUTPUT_DIR / "embedding_distribution_central.html"
 
     fig.write_html(
         output,
@@ -1411,10 +1082,7 @@ def create_central_distribution(
         auto_open=False,
     )
 
-    print(
-        f"Saved central distribution: "
-        f"{output}"
-    )
+    print(f"Saved central distribution: {output}")
 
     return fig
 
@@ -1448,12 +1116,7 @@ def create_log_magnitude_distribution(
         go.Histogram(
             x=log_magnitude,
             nbinsx=LOG_MAGNITUDE_NBINS,
-            hovertemplate=(
-                "log10(|value|): %{x:.4f}"
-                "<br>"
-                "Count: %{y}"
-                "<extra></extra>"
-            ),
+            hovertemplate=("log10(|value|): %{x:.4f}<br>Count: %{y}<extra></extra>"),
             name="Log magnitude",
         )
     )
@@ -1483,10 +1146,7 @@ def create_log_magnitude_distribution(
         ),
     )
 
-    output = (
-        OUTPUT_DIR /
-        "embedding_distribution_log_magnitude.html"
-    )
+    output = OUTPUT_DIR / "embedding_distribution_log_magnitude.html"
 
     fig.write_html(
         output,
@@ -1494,10 +1154,7 @@ def create_log_magnitude_distribution(
         auto_open=False,
     )
 
-    print(
-        f"Saved log-magnitude plot: "
-        f"{output}"
-    )
+    print(f"Saved log-magnitude plot: {output}")
 
     return fig
 
@@ -1520,14 +1177,12 @@ def create_ranked_magnitude_profile(
     ranked = abs_values[order]
     ranks = np.arange(1, len(ranked) + 1)
 
-    squared = ranked ** 2
+    squared = ranked**2
     total_squared = max(
         float(np.sum(squared)),
         np.finfo(float).eps,
     )
-    cumulative_energy = (
-        np.cumsum(squared) / total_squared * 100
-    )
+    cumulative_energy = np.cumsum(squared) / total_squared * 100
 
     fig = go.Figure()
 
@@ -1538,10 +1193,7 @@ def create_ranked_magnitude_profile(
             mode="lines",
             name="|embedding value|",
             hovertemplate=(
-                "Magnitude rank: %{x:,}"
-                "<br>"
-                "|Value|: %{y:.6f}"
-                "<extra></extra>"
+                "Magnitude rank: %{x:,}<br>|Value|: %{y:.6f}<extra></extra>"
             ),
         )
     )
@@ -1595,10 +1247,7 @@ def create_ranked_magnitude_profile(
         ),
     )
 
-    output = (
-        OUTPUT_DIR /
-        "embedding_ranked_magnitude.html"
-    )
+    output = OUTPUT_DIR / "embedding_ranked_magnitude.html"
 
     fig.write_html(
         output,
@@ -1606,10 +1255,7 @@ def create_ranked_magnitude_profile(
         auto_open=False,
     )
 
-    print(
-        f"Saved ranked magnitude: "
-        f"{output}"
-    )
+    print(f"Saved ranked magnitude: {output}")
 
     return fig
 
@@ -1617,6 +1263,7 @@ def create_ranked_magnitude_profile(
 # ============================================================
 # 11. UNIFIED DASHBOARD
 # ============================================================
+
 
 def create_dashboard(
     embedding,
@@ -1629,23 +1276,19 @@ def create_dashboard(
     )
 
     abs_values = np.abs(embedding)
-    central = embedding[
-        abs_values <= CENTRAL_RANGE
-    ]
+    central = embedding[abs_values <= CENTRAL_RANGE]
 
     # Ranked magnitude and cumulative L2 energy.
     order = np.argsort(abs_values)[::-1]
     ranked = abs_values[order]
     ranks = np.arange(1, len(ranked) + 1)
 
-    squared = ranked ** 2
+    squared = ranked**2
     total_squared = max(
         float(np.sum(squared)),
         np.finfo(float).eps,
     )
-    cumulative_energy = (
-        np.cumsum(squared) / total_squared * 100
-    )
+    cumulative_energy = np.cumsum(squared) / total_squared * 100
 
     # --------------------------------------------------------
     # Five-row Level-1 dashboard.
@@ -1693,11 +1336,7 @@ def create_dashboard(
                 title="Value",
                 x=1.02,
             ),
-            hovertemplate=(
-                "Dimension: %{x}<br>"
-                "Value: %{z:.6f}"
-                "<extra></extra>"
-            ),
+            hovertemplate=("Dimension: %{x}<br>Value: %{z:.6f}<extra></extra>"),
         ),
         row=1,
         col=1,
@@ -1716,11 +1355,7 @@ def create_dashboard(
             line=dict(
                 width=1.1,
             ),
-            hovertemplate=(
-                "<b>Dimension %{x}</b><br>"
-                "Value: %{y:.6f}"
-                "<extra></extra>"
-            ),
+            hovertemplate=("<b>Dimension %{x}</b><br>Value: %{y:.6f}<extra></extra>"),
         ),
         row=2,
         col=1,
@@ -1743,12 +1378,7 @@ def create_dashboard(
             x=embedding,
             nbinsx=FULL_RANGE_NBINS,
             name="Full distribution",
-            hovertemplate=(
-                "Embedding value: %{x:.4f}"
-                "<br>"
-                "Count: %{y}"
-                "<extra></extra>"
-            ),
+            hovertemplate=("Embedding value: %{x:.4f}<br>Count: %{y}<extra></extra>"),
         ),
         row=3,
         col=1,
@@ -1763,12 +1393,7 @@ def create_dashboard(
             x=central,
             nbinsx=CENTRAL_RANGE_NBINS,
             name="Central distribution",
-            hovertemplate=(
-                "Embedding value: %{x:.6f}"
-                "<br>"
-                "Count: %{y}"
-                "<extra></extra>"
-            ),
+            hovertemplate=("Embedding value: %{x:.6f}<br>Count: %{y}<extra></extra>"),
         ),
         row=4,
         col=1,
@@ -1793,10 +1418,7 @@ def create_dashboard(
             mode="lines",
             name="|value|",
             hovertemplate=(
-                "Magnitude rank: %{x:,}"
-                "<br>"
-                "|Value|: %{y:.6f}"
-                "<extra></extra>"
+                "Magnitude rank: %{x:,}<br>|Value|: %{y:.6f}<extra></extra>"
             ),
         ),
         row=5,
@@ -1972,9 +1594,7 @@ def create_dashboard(
         yanchor="top",
         showarrow=False,
         align="left",
-        bgcolor=(
-            "rgba(255,255,255,0.92)"
-        ),
+        bgcolor=("rgba(255,255,255,0.92)"),
         bordercolor="gray",
         borderwidth=1,
         font=dict(
@@ -1982,10 +1602,7 @@ def create_dashboard(
         ),
     )
 
-    output = (
-        OUTPUT_DIR /
-        "embedding_dashboard.html"
-    )
+    output = OUTPUT_DIR / "embedding_dashboard.html"
 
     fig.write_html(
         output,
@@ -1993,10 +1610,7 @@ def create_dashboard(
         auto_open=False,
     )
 
-    print(
-        f"Saved dashboard     : "
-        f"{output}"
-    )
+    print(f"Saved dashboard     : {output}")
 
     return fig
 
@@ -2005,27 +1619,16 @@ def create_dashboard(
 # 12. MAIN
 # ============================================================
 
+
 def main():
 
-    target = (
-        find_target_embedding()
-    )
+    target = find_target_embedding()
 
-    embedding = (
-        prepare_embedding(target)
-    )
+    embedding = prepare_embedding(target)
 
-    stats, top_rows = (
-        calculate_statistics(
-            embedding
-        )
-    )
+    stats, top_rows = calculate_statistics(embedding)
 
-    dimension_df = (
-        create_dimension_dataframe(
-            embedding
-        )
-    )
+    dimension_df = create_dimension_dataframe(embedding)
 
     save_outputs(
         stats,
@@ -2104,41 +1707,24 @@ def main():
 
     print()
     print("Output directory:")
-    print(
-        f"  {OUTPUT_DIR.resolve()}"
-    )
+    print(f"  {OUTPUT_DIR.resolve()}")
 
     print()
     print("Generated files:")
 
-    for path in sorted(
-        OUTPUT_DIR.iterdir()
-    ):
-        print(
-            f"  {path.name}"
-        )
+    for path in sorted(OUTPUT_DIR.iterdir()):
+        print(f"  {path.name}")
 
     print()
     print("Target:")
-    print(
-        f"  {TARGET_RECORD_ID} "
-        f"[{TARGET_START:,} – "
-        f"{TARGET_END:,}]"
-    )
+    print(f"  {TARGET_RECORD_ID} [{TARGET_START:,} – {TARGET_END:,}]")
 
     print()
-    print(
-        "Important:"
-    )
+    print("Important:")
 
-    print(
-        "  The 3D/4D plots are "
-        "single-embedding fingerprints."
-    )
+    print("  The 3D/4D plots are single-embedding fingerprints.")
 
-    print(
-        "  They are not PCA/UMAP projections."
-    )
+    print("  They are not PCA/UMAP projections.")
 
     print(
         "  PCA/UMAP becomes appropriate "

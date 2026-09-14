@@ -11,11 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from pathlib import PurePosixPath
 from urllib.request import Request, urlopen
 
 import pyarrow as pa
-
 
 # ----------------------------------------------------------------------
 # Local execution defaults
@@ -28,13 +26,13 @@ DEFAULT_THREADS = max(
 
 DEFAULT_BINARY = "/teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/clickhouse"
 
-DEFAULT_TEMP_DIRECTORY = Path(
-    "data/tmp/clickhouse"
-)
+DEFAULT_TEMP_DIRECTORY = Path("data/tmp/clickhouse")
+
 
 @dataclass(frozen=True)
 class ClickHouseConfig:
     """Configuration for a local `clickhouse local` resource."""
+
     binary_path: str = DEFAULT_BINARY
     threads: int | None = DEFAULT_THREADS
     temp_directory: str | Path | None = DEFAULT_TEMP_DIRECTORY
@@ -91,9 +89,7 @@ class ClickHouseResource:
         self._binary = resolved
 
         if self.config.temp_directory is not None:
-            Path(
-                self.config.temp_directory
-            ).expanduser().mkdir(
+            Path(self.config.temp_directory).expanduser().mkdir(
                 parents=True,
                 exist_ok=True,
             )
@@ -137,9 +133,7 @@ class ClickHouseResource:
         dataset_path = Path(path).expanduser()
 
         if not dataset_path.exists():
-            raise FileNotFoundError(
-                f"Parquet dataset does not exist: {dataset_path}"
-            )
+            raise FileNotFoundError(f"Parquet dataset does not exist: {dataset_path}")
 
         glob_expr = (
             str(dataset_path / "*.parquet")
@@ -272,14 +266,11 @@ class ClickHouseResource:
             raise ValueError("shard_urls cannot be empty")
 
         normalized = [
-            url for url in shard_urls
-            if urlparse(url).scheme in {"http", "https"}
+            url for url in shard_urls if urlparse(url).scheme in {"http", "https"}
         ]
 
         if len(normalized) != len(shard_urls):
-            raise ValueError(
-                "All Hugging Face shard URLs must use http:// or https://"
-            )
+            raise ValueError("All Hugging Face shard URLs must use http:// or https://")
 
         source = self._build_hf_url_source(
             self._hf_urls_to_clickhouse_glob(normalized),
@@ -386,8 +377,7 @@ class ClickHouseResource:
         shard_paths.sort()
 
         return [
-            f"https://huggingface.co/datasets/{repo}/resolve/"
-            f"{url_revision}/{path}"
+            f"https://huggingface.co/datasets/{repo}/resolve/{url_revision}/{path}"
             for path in shard_paths
         ]
 
@@ -494,9 +484,7 @@ class ClickHouseResource:
             i += 1
 
         if remaining:
-            raise ValueError(
-                f"{len(remaining)} query parameters were not consumed"
-            )
+            raise ValueError(f"{len(remaining)} query parameters were not consumed")
 
         return "".join(out)
 
@@ -547,13 +535,10 @@ class ClickHouseResource:
 
             if result.returncode != 0:
                 raise RuntimeError(
-                    f"clickhouse local query failed with exit code "
-                    f"{result.returncode}"
+                    f"clickhouse local query failed with exit code {result.returncode}"
                 )
 
-            return pa.ipc.open_file(
-                pa.BufferReader(result.stdout)
-            ).read_all()
+            return pa.ipc.open_file(pa.BufferReader(result.stdout)).read_all()
 
         finally:
             Path(query_file).unlink(missing_ok=True)
@@ -591,9 +576,7 @@ class ClickHouseResource:
 
         if process.stdout is None:
             process.kill()
-            raise RuntimeError(
-                "Failed to open ClickHouse stdout pipe."
-            )
+            raise RuntimeError("Failed to open ClickHouse stdout pipe.")
 
         try:
             reader = pa.ipc.open_stream(process.stdout)

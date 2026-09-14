@@ -58,8 +58,6 @@ from faceberg.iceberg import (
 )
 from pyiceberg.types import StringType
 
-
-
 LINEAGE_MANIFEST_FILENAME = "lineage.yml"
 
 
@@ -100,6 +98,7 @@ def write_lineage_manifest(catalog_path: str | Path) -> Path:
     )
 
     return manifest_path
+
 
 # ============================================================================
 # Monkey-patching
@@ -202,6 +201,7 @@ _iceberg_mod.write_manifest = _patched_write_manifest
 # ============================================================================
 # Pipeline table registry
 # ============================================================================
+
 
 class PipelineTableSpec(TypedDict):
     table: str | None
@@ -424,10 +424,7 @@ class PipelineCatalog:
         self._cat.init()
         self._cat.create_namespace_if_not_exists("carbon")
 
-        existing = {
-            str(table)
-            for table in self._cat.list_tables("carbon")
-        }
+        existing = {str(table) for table in self._cat.list_tables("carbon")}
 
         for spec in catalog_managed_tables().values():
             if spec["table"] not in existing:
@@ -447,13 +444,9 @@ class PipelineCatalog:
 
         if node_id is not None:
             if node_id not in PIPELINE_TABLES:
-                raise KeyError(
-                    f"{node_id!r} is not a catalog-managed table"
-                )
+                raise KeyError(f"{node_id!r} is not a catalog-managed table")
 
-            self._cat.sync_dataset(
-                PIPELINE_TABLES[node_id]["table"]
-            )
+            self._cat.sync_dataset(PIPELINE_TABLES[node_id]["table"])
             return
 
         self._cat.sync_datasets()
@@ -462,13 +455,9 @@ class PipelineCatalog:
         """Return whether a pipeline table exists."""
 
         if node_id not in PIPELINE_TABLES:
-            raise KeyError(
-                f"{node_id!r} is not a catalog-managed table"
-            )
+            raise KeyError(f"{node_id!r} is not a catalog-managed table")
 
-        return self._cat.table_exists(
-            PIPELINE_TABLES[node_id]["table"]
-        )
+        return self._cat.table_exists(PIPELINE_TABLES[node_id]["table"])
 
     # ------------------------------------------------------------------
     # Reads
@@ -596,17 +585,12 @@ class PipelineCatalog:
         """Return live schema and partition metadata."""
 
         if node_id not in PIPELINE_TABLES:
-            raise KeyError(
-                f"{node_id!r} is not a catalog-managed table"
-            )
+            raise KeyError(f"{node_id!r} is not a catalog-managed table")
 
         table = self.load_table(node_id)
         iceberg_schema = table.schema()
 
-        schema = {
-            field.name: str(field.field_type)
-            for field in iceberg_schema.fields
-        }
+        schema = {field.name: str(field.field_type) for field in iceberg_schema.fields}
 
         partition_fields = (
             tuple(field.name for field in table.spec().fields)
@@ -624,10 +608,7 @@ class PipelineCatalog:
     def describe_all(self) -> dict[str, TableDescription]:
         """Return live descriptions for all catalog-managed datasets."""
 
-        return {
-            node_id: self.describe(node_id)
-            for node_id in PIPELINE_TABLES
-        }
+        return {node_id: self.describe(node_id) for node_id in PIPELINE_TABLES}
 
     # ------------------------------------------------------------------
     # Sharing
@@ -641,14 +622,10 @@ class PipelineCatalog:
         """
 
         if alias != "cat":
-            raise ValueError(
-                "attach_sql() only supports the 'cat' alias"
-            )
+            raise ValueError("attach_sql() only supports the 'cat' alias")
 
-        return (
-            "INSTALL iceberg; LOAD iceberg;"
-        )
-    
+        return "INSTALL iceberg; LOAD iceberg;"
+
     def list_data_files(
         self,
         node_id: str,
@@ -656,9 +633,7 @@ class PipelineCatalog:
         """Return the underlying Parquet file URIs for a catalog table."""
 
         if node_id not in PIPELINE_TABLES:
-            raise KeyError(
-                f"{node_id!r} is not a catalog-managed pipeline table"
-            )
+            raise KeyError(f"{node_id!r} is not a catalog-managed pipeline table")
 
         from faceberg.catalog import discover_dataset
 
@@ -689,6 +664,4 @@ def get_catalog(
     if mode == "remote":
         return PipelineCatalog.remote(**kwargs)
 
-    raise ValueError(
-        f"mode must be 'local' or 'remote', got {mode!r}"
-    )
+    raise ValueError(f"mode must be 'local' or 'remote', got {mode!r}")

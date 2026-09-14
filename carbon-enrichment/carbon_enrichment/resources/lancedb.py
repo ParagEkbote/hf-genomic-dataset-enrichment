@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence
+from typing import Any
 
 import lancedb
 import pyarrow as pa
@@ -14,7 +15,7 @@ class LanceDBConfig:
 
     # LanceDB uses a local directory URI (e.g., "./.lancedb") or S3 URI
     uri: str = "./data/lancedb_store"
-    
+
     table_name: str = "carbon_embeddings"
 
     # Default distance metric ('cosine', 'l2', or 'dot')
@@ -32,7 +33,7 @@ class LanceDBResource:
     Thin resource wrapper around a LanceDB connection.
 
     Provides table management, storage, and retrieval primitives.
-    Retains the retry logic to handle potential OS-level file locking 
+    Retains the retry logic to handle potential OS-level file locking
     contentions during high-concurrency local writes.
     """
 
@@ -50,7 +51,7 @@ class LanceDBResource:
         return self._db
 
     def close(self) -> None:
-        # LanceDB connections are lightweight and don't strictly require 
+        # LanceDB connections are lightweight and don't strictly require
         # closing like a gRPC client, but we clear the reference for parity.
         self._db = None
 
@@ -115,13 +116,9 @@ class LanceDBResource:
         LanceDB requires a PyArrow schema or a Pydantic model.
         """
         name = table_name or self.config.table_name
-        
+
         return self._with_retry(
-            lambda: self.get_db().create_table(
-                name=name, 
-                schema=schema, 
-                exist_ok=True
-            ),
+            lambda: self.get_db().create_table(name=name, schema=schema, exist_ok=True),
             f"ensure_table('{name}')",
         )
 
@@ -136,9 +133,7 @@ class LanceDBResource:
 
         return self._with_retry(
             lambda: self.get_db().create_table(
-                name=name, 
-                schema=schema, 
-                mode="overwrite"
+                name=name, schema=schema, mode="overwrite"
             ),
             f"recreate_table('{name}')",
         )
@@ -147,7 +142,7 @@ class LanceDBResource:
         """Return the number of rows in a table."""
         name = table_name or self.config.table_name
         table = self.get_db().open_table(name)
-        
+
         return self._with_retry(
             lambda: len(table),
             f"count('{name}')",
@@ -159,19 +154,19 @@ class LanceDBResource:
 
     def upsert_points(
         self,
-        data: List[Dict[str, Any]] | pa.Table,
+        data: list[dict[str, Any]] | pa.Table,
         *,
         table_name: str | None = None,
     ) -> None:
         """
         Insert or update points.
-        Unlike Qdrant's PointStruct, LanceDB natively accepts a list of 
+        Unlike Qdrant's PointStruct, LanceDB natively accepts a list of
         dictionaries, a Pandas DataFrame, or a PyArrow Table.
         """
         name = table_name or self.config.table_name
         table = self.get_db().open_table(name)
 
-        # LanceDB supports merge/upsert via merge_insert, but basic 
+        # LanceDB supports merge/upsert via merge_insert, but basic
         # append is 'add'. We use add here assuming unique data ingestion.
         self._with_retry(
             lambda: table.add(data),
@@ -189,7 +184,7 @@ class LanceDBResource:
         limit: int = 10,
         table_name: str | None = None,
         query_filter: str | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search for nearest vectors."""
         name = table_name or self.config.table_name
         table = self.get_db().open_table(name)
@@ -209,10 +204,10 @@ class LanceDBResource:
         *,
         limit: int = 10,
         table_name: str | None = None,
-    ) -> List[List[Dict[str, Any]]]:
+    ) -> list[list[dict[str, Any]]]:
         """
         Since LanceDB is local, batching queries avoids network latency inherently.
-        However, you can execute loops locally with minimal overhead, or 
+        However, you can execute loops locally with minimal overhead, or
         process directly on a pyarrow batch.
         """
         name = table_name or self.config.table_name
@@ -246,11 +241,12 @@ class LanceDBResource:
         without moving data out of the Arrow format.
         """
         import duckdb
+
         name = table_name or self.config.table_name
-        
+
         # Expose the Lance dataset to DuckDB
-        ds = self.get_db().open_table(name).to_lance() 
-        
+        ds = self.get_db().open_table(name).to_lance()
+
         def _do_facet():
             return duckdb.sql(
                 f"SELECT {key}, COUNT(*) as count FROM ds GROUP BY {key} ORDER BY count DESC"

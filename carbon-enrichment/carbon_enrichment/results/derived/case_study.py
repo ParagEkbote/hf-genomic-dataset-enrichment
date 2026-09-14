@@ -1,10 +1,16 @@
 from __future__ import annotations
-import argparse, json, sys, time
+
+import argparse
+import json
+import sys
+import time
 from pathlib import Path
+
 import pyarrow as pa
 import pyarrow.csv as pc
 import pyarrow.parquet as pq
-from carbon_enrichment.resources.clickhouse import ClickHouseResource, ClickHouseConfig
+
+from carbon_enrichment.resources.clickhouse import ClickHouseConfig, ClickHouseResource
 
 EMBEDDINGS_URL = "https://huggingface.co/datasets/AINovice2005/carbon-embeddings/resolve/main/*.parquet"
 LIKELIHOOD_URL = "https://huggingface.co/datasets/AINovice2005/carbon-likelihood-stats/resolve/main/*.parquet"
@@ -27,26 +33,43 @@ COL_START = "`start`"
 COL_END = "`end`"
 STREAM_BATCH_ROWS = 200_000
 
-def sql_quote(v: str) -> str: return "'" + v.replace("'", "''") + "'"
-def source_for(r, n): return r.source_expr(n)
+
+def sql_quote(v: str) -> str:
+    return "'" + v.replace("'", "''") + "'"
+
+
+def source_for(r, n):
+    return r.source_expr(n)
+
+
 def table_to_parquet(t, p):
     p.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(t, p, compression="zstd")
+
+
 def _csv_safe_table(t):
     arrs, flds = [], []
     for i, f in enumerate(t.schema):
         col = t.column(i)
         if pa.types.is_list(f.type) or pa.types.is_large_list(f.type):
             vals = col.to_pylist()
-            svals = [json.dumps(v, separators=(",", ":")) if v is not None else None for v in vals]
+            svals = [
+                json.dumps(v, separators=(",", ":")) if v is not None else None
+                for v in vals
+            ]
             arrs.append(pa.array(svals, type=pa.string()))
             flds.append(pa.field(f.name, pa.string()))
         else:
-            arrs.append(col); flds.append(f)
+            arrs.append(col)
+            flds.append(f)
     return pa.Table.from_arrays(arrs, schema=pa.schema(flds))
+
+
 def table_to_csv(t, p):
     p.parent.mkdir(parents=True, exist_ok=True)
     pc.write_csv(_csv_safe_table(t), p)
+
+
 def parquet_to_csv_streaming(parq, csv, batch_rows=STREAM_BATCH_ROWS):
     csv.parent.mkdir(parents=True, exist_ok=True)
     pf = pq.ParquetFile(parq)
@@ -54,13 +77,18 @@ def parquet_to_csv_streaming(parq, csv, batch_rows=STREAM_BATCH_ROWS):
     try:
         for b in pf.iter_batches(batch_size=batch_rows):
             st = _csv_safe_table(pa.Table.from_batches([b]))
-            if w is None: w = pc.CSVWriter(csv, st.schema)
+            if w is None:
+                w = pc.CSVWriter(csv, st.schema)
             w.write_table(st)
     finally:
-        if w: w.close()
+        if w:
+            w.close()
+
+
 def inspect_columns(ch, src):
     tbl = ch.query_arrow(f"DESCRIBE TABLE {src}")
     return {str(x) for x in tbl.column("name").to_pylist()}
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="Phase 4.5 bio v3 fixed")
@@ -74,26 +102,48 @@ def parse_args():
     p.add_argument("--threads", type=int, default=8)
     p.add_argument("--max-memory-bytes", type=int, default=0)
     p.add_argument("--stream-batch-rows", type=int, default=STREAM_BATCH_ROWS)
-    p.add_argument("--min-boundary-distance", type=int, default=DEFAULT_MIN_BOUNDARY_DIST)
+    p.add_argument(
+        "--min-boundary-distance", type=int, default=DEFAULT_MIN_BOUNDARY_DIST
+    )
     p.add_argument("--entropy-min", type=float, default=DEFAULT_ENTROPY_MIN)
     p.add_argument("--gc-bio-min", type=float, default=DEFAULT_GC_BIO_MIN)
     p.add_argument("--gc-bio-max", type=float, default=DEFAULT_GC_BIO_MAX)
-    p.add_argument("--bio-perplexity-min", type=float, default=DEFAULT_PERPLEXITY_BIO_MIN)
-    p.add_argument("--bio-perplexity-max", type=float, default=DEFAULT_PERPLEXITY_BIO_MAX)
+    p.add_argument(
+        "--bio-perplexity-min", type=float, default=DEFAULT_PERPLEXITY_BIO_MIN
+    )
+    p.add_argument(
+        "--bio-perplexity-max", type=float, default=DEFAULT_PERPLEXITY_BIO_MAX
+    )
     return p.parse_args()
+
 
 def main() -> int:
     args = parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    cohort_path = Path("/teamspace/studios/this_studio/hf-genomic-dataset-enrichment/results/derived/common_cohort/common_cohort.csv")
-    if not cohort_path.exists(): raise FileNotFoundError(cohort_path)
+    cohort_path = Path(
+        "/teamspace/studios/this_studio/hf-genomic-dataset-enrichment/results/derived/common_cohort/common_cohort.csv"
+    )
+    if not cohort_path.exists():
+        raise FileNotFoundError(cohort_path)
     tbl = pc.read_csv(cohort_path)
-    keys = set(zip(tbl["record_id"].to_pylist(), tbl["start"].to_pylist(), tbl["end"].to_pylist()))
+    keys = set(
+        zip(
+            tbl["record_id"].to_pylist(),
+            tbl["start"].to_pylist(),
+            tbl["end"].to_pylist(),
+        )
+    )
     print(f"Keys {len(keys):,} -> {args.output}")
     sorted_keys = sorted(keys, key=lambda k: (k[0], k[1], k[2]))
     keys_table = pa.Table.from_arrays(
-        [pa.array([k[0] for k in sorted_keys]), pa.array([k[1] for k in sorted_keys], type=pa.int64()), pa.array([k[2] for k in sorted_keys], type=pa.int64())],
-        schema=pa.schema([("record_id", pa.string()), ("start", pa.int64()), ("end", pa.int64())]),
+        [
+            pa.array([k[0] for k in sorted_keys]),
+            pa.array([k[1] for k in sorted_keys], type=pa.int64()),
+            pa.array([k[2] for k in sorted_keys], type=pa.int64()),
+        ],
+        schema=pa.schema(
+            [("record_id", pa.string()), ("start", pa.int64()), ("end", pa.int64())]
+        ),
     )
     keys_path = args.output / "_cohort_keys.parquet"
     record_path = args.output / "_record_metrics.parquet"
@@ -112,17 +162,40 @@ def main() -> int:
             lcols = inspect_columns(ch, likelihood)
             ccols = inspect_columns(ch, cpu)
             has_token = "per_token_logprob" in lcols
-            boundary_candidates = [("gene_start","gene_end"),("gene_start_position","gene_end_position"),("begin_of_gene_position","end_of_gene_position")]
-            boundary_pair = next((p for p in boundary_candidates if p[0] in ccols and p[1] in ccols), None)
-            taxonomy_expr = f"arrayElement(splitByChar(';', taxonomy), {args.taxon_index + 1})" if args.taxon_index != -1 else "arrayElement(splitByChar(';', taxonomy), -1)"
-            token_fields = ",length(per_token_logprob) AS token_profile_length ,arrayMin(per_token_logprob) AS token_profile_min ,arrayMax(per_token_logprob) AS token_profile_max ,arrayAvg(per_token_logprob) AS token_profile_mean" if has_token else ""
-            boundary_fields = f",toFloat64({boundary_pair[0]}) AS gene_start_position ,toFloat64({boundary_pair[1]}) AS gene_end_position" if boundary_pair else ""
+            boundary_candidates = [
+                ("gene_start", "gene_end"),
+                ("gene_start_position", "gene_end_position"),
+                ("begin_of_gene_position", "end_of_gene_position"),
+            ]
+            boundary_pair = next(
+                (p for p in boundary_candidates if p[0] in ccols and p[1] in ccols),
+                None,
+            )
+            taxonomy_expr = (
+                f"arrayElement(splitByChar(';', taxonomy), {args.taxon_index + 1})"
+                if args.taxon_index != -1
+                else "arrayElement(splitByChar(';', taxonomy), -1)"
+            )
+            token_fields = (
+                ",length(per_token_logprob) AS token_profile_length ,arrayMin(per_token_logprob) AS token_profile_min ,arrayMax(per_token_logprob) AS token_profile_max ,arrayAvg(per_token_logprob) AS token_profile_mean"
+                if has_token
+                else ""
+            )
+            boundary_fields = (
+                f",toFloat64({boundary_pair[0]}) AS gene_start_position ,toFloat64({boundary_pair[1]}) AS gene_end_position"
+                if boundary_pair
+                else ""
+            )
             top_dims = max(1, int(args.top_dims))
             if boundary_pair:
                 final_boundary = ",gene_start_position, gene_end_position, (argmin_position >= gene_start_position AND argmin_position <= gene_end_position) AS argmin_inside_gene_boundary, least(abs(toFloat64(argmin_position)-gene_start_position), abs(toFloat64(argmin_position)-gene_end_position)) AS distance_to_nearest_gene_boundary, 'exact_numeric_gene_boundaries' AS boundary_method"
             else:
                 final_boundary = ",CAST(NULL AS Nullable(Float64)) AS gene_start_position, CAST(NULL AS Nullable(Float64)) AS gene_end_position, CAST(NULL AS Nullable(UInt8)) AS argmin_inside_gene_boundary, CAST(NULL AS Nullable(Float64)) AS distance_to_nearest_gene_boundary, 'sequence_boundary_proxy_only' AS boundary_method"
-            mem = f", max_memory_usage = {args.max_memory_bytes}" if args.max_memory_bytes>0 else ""
+            mem = (
+                f", max_memory_usage = {args.max_memory_bytes}"
+                if args.max_memory_bytes > 0
+                else ""
+            )
             rec_dims_sql = str(RECURRENT_EMBEDDING_DIMS)
 
             sql = f"""
@@ -245,39 +318,76 @@ def main() -> int:
                      input_format_parquet_use_native_reader_v3=1, input_format_parquet_filter_push_down=1, input_format_parquet_bloom_filter_push_down=1, input_format_parquet_dictionary_filter_push_down=1 {mem}
             """
             print("Executing v3...")
-            qs=time.time()
-            writer=None; total=0
+            qs = time.time()
+            writer = None
+            total = 0
             try:
                 for batch in ch.stream_arrow_batches(sql):
-                    if batch.num_rows==0: continue
-                    bt=pa.Table.from_batches([batch])
-                    if writer is None: writer=pq.ParquetWriter(record_path, bt.schema, compression="zstd")
-                    writer.write_table(bt); total+=bt.num_rows
+                    if batch.num_rows == 0:
+                        continue
+                    bt = pa.Table.from_batches([batch])
+                    if writer is None:
+                        writer = pq.ParquetWriter(
+                            record_path, bt.schema, compression="zstd"
+                        )
+                    writer.write_table(bt)
+                    total += bt.num_rows
             finally:
-                if writer: writer.close()
-            print(f"Rows {total} in {time.time()-qs:.1f}s")
-            if total==0: raise RuntimeError("Zero rows")
-            parquet_to_csv_streaming(record_path, args.output/"record_metrics.csv")
+                if writer:
+                    writer.close()
+            print(f"Rows {total} in {time.time() - qs:.1f}s")
+            if total == 0:
+                raise RuntimeError("Zero rows")
+            parquet_to_csv_streaming(record_path, args.output / "record_metrics.csv")
             summary_sql = f"SELECT count() AS n, avg(bio_content_score) AS bio_mean, avg(taxon_aware_content_score) AS taxon_mean, sum(toUInt64(is_edge_artifact)) AS edge_art, sum(toUInt64(is_low_entropy)) AS low_ent, sum(toUInt64(has_recurrent_embedding_dim)) AS recur FROM file({sql_quote(str(record_path))}, Parquet)"
-            table_to_csv(ch.query_arrow(summary_sql), args.output/"metric_summary.csv")
+            table_to_csv(
+                ch.query_arrow(summary_sql), args.output / "metric_summary.csv"
+            )
             top_sql = f"SELECT record_id, {COL_START}, {COL_END}, taxon_group, sequence_length, gc_content, perplexity, multi_layer_anomaly_score, bio_content_score, taxon_aware_content_score, distance_to_sequence_boundary, is_edge_artifact, has_recurrent_embedding_dim, boundary_method FROM file({sql_quote(str(record_path))}, Parquet) ORDER BY multi_layer_anomaly_score DESC LIMIT 1000"
-            table_to_csv(ch.query_arrow(top_sql), args.output/"top_anomalies.csv")
+            table_to_csv(ch.query_arrow(top_sql), args.output / "top_anomalies.csv")
             content_sql = f"SELECT record_id, {COL_START}, {COL_END}, taxon_group, sequence_length, gc_content, perplexity, content_anomaly_score, bio_content_score, taxon_aware_content_score, gc_z, taxon_gc_z, distance_to_sequence_boundary, is_edge_artifact, boundary_method FROM file({sql_quote(str(record_path))}, Parquet) WHERE sequence_length >= {args.content_length_min} AND sequence_length <= {args.content_length_max} AND taxon_group_n >= {args.min_taxon_n} ORDER BY content_anomaly_score DESC LIMIT 1000"
-            table_to_csv(ch.query_arrow(content_sql), args.output/"top_content_anomalies.csv")
+            table_to_csv(
+                ch.query_arrow(content_sql), args.output / "top_content_anomalies.csv"
+            )
             bio_sql = f"SELECT record_id, {COL_START}, {COL_END}, taxon_group, sequence_length, gc_content, perplexity, shannon_entropy, content_anomaly_score, bio_content_score, taxon_aware_content_score, taxon_gc_z, taxon_perplexity_z, intra_taxon_perplexity_percentile, is_coding_region, distance_to_sequence_boundary, boundary_method, top_embedding_dimensions FROM file({sql_quote(str(record_path))}, Parquet) WHERE sequence_length >= {args.content_length_min} AND sequence_length <= {args.content_length_max} AND taxon_group_n >= {args.min_taxon_n} AND distance_to_sequence_boundary >= {args.min_boundary_distance} AND shannon_entropy >= {args.entropy_min} AND gc_content BETWEEN {args.gc_bio_min} AND {args.gc_bio_max} AND perplexity BETWEEN {args.bio_perplexity_min} AND {args.bio_perplexity_max} AND NOT has_recurrent_embedding_dim ORDER BY bio_content_score DESC, taxon_aware_content_score DESC LIMIT 1000"
-            bt=ch.query_arrow(bio_sql)
-            table_to_csv(bt, args.output/"top_biological_content_anomalies.csv")
+            bt = ch.query_arrow(bio_sql)
+            table_to_csv(bt, args.output / "top_biological_content_anomalies.csv")
             print(f"Bio rows {bt.num_rows}")
             high_gc_sql = f"SELECT record_id, {COL_START}, {COL_END}, taxon_group, sequence_length, gc_content, gc_z, taxon_gc_z, intra_taxon_gc_percentile, is_coding_region FROM file({sql_quote(str(record_path))}, Parquet) WHERE gc_content > 0.70 AND taxon_group_n >= {args.min_taxon_n} AND intra_taxon_gc_percentile > 0.95 ORDER BY gc_z DESC LIMIT 1000"
-            table_to_csv(ch.query_arrow(high_gc_sql), args.output/"top_high_gc_islands.csv")
+            table_to_csv(
+                ch.query_arrow(high_gc_sql), args.output / "top_high_gc_islands.csv"
+            )
             noncode_sql = f"SELECT record_id, {COL_START}, {COL_END}, taxon_group, sequence_length, gc_content, perplexity, bio_content_score, distance_to_sequence_boundary FROM file({sql_quote(str(record_path))}, Parquet) WHERE is_coding_region=0 AND taxon_group_n >= {args.min_taxon_n} AND distance_to_sequence_boundary >= {args.min_boundary_distance} AND shannon_entropy >= {args.entropy_min} ORDER BY bio_content_score DESC LIMIT 1000"
-            table_to_csv(ch.query_arrow(noncode_sql), args.output/"top_non_coding_anomalies.csv")
-            (args.output/"run_metadata.json").write_text(json.dumps({"phase":"4.5_bio_v3","bio_filters":{"dist":args.min_boundary_distance,"ent":args.entropy_min,"gc":[args.gc_bio_min,args.gc_bio_max],"ppl":[args.bio_perplexity_min,args.bio_perplexity_max]},"elapsed":time.time()-started},indent=2))
-            keys_path.unlink(missing_ok=True); record_path.unlink(missing_ok=True)
-            print("Done"); return 0
+            table_to_csv(
+                ch.query_arrow(noncode_sql),
+                args.output / "top_non_coding_anomalies.csv",
+            )
+            (args.output / "run_metadata.json").write_text(
+                json.dumps(
+                    {
+                        "phase": "4.5_bio_v3",
+                        "bio_filters": {
+                            "dist": args.min_boundary_distance,
+                            "ent": args.entropy_min,
+                            "gc": [args.gc_bio_min, args.gc_bio_max],
+                            "ppl": [args.bio_perplexity_min, args.bio_perplexity_max],
+                        },
+                        "elapsed": time.time() - started,
+                    },
+                    indent=2,
+                )
+            )
+            keys_path.unlink(missing_ok=True)
+            record_path.unlink(missing_ok=True)
+            print("Done")
+            return 0
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        import traceback; traceback.print_exc()
+        import traceback
+
+        traceback.print_exc()
         return 1
 
-if __name__ == "__main__": sys.exit(main())
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,15 +1,15 @@
 from __future__ import annotations
+
 import argparse
 import math
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import pyarrow as pa
 import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 
 from carbon_enrichment.resources.clickhouse import ClickHouseResource
-
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -72,10 +72,9 @@ def _write_stream(ch: ClickHouseResource, sql: str, path: Path) -> int:
 # Schema discovery
 # ---------------------------------------------------------------------------
 
+
 def _columns(ch: ClickHouseResource, dataset_name: str) -> set[str]:
-    table = ch.query_arrow(
-        f"DESCRIBE TABLE {ch.source_expr(dataset_name)}"
-    )
+    table = ch.query_arrow(f"DESCRIBE TABLE {ch.source_expr(dataset_name)}")
     return {str(x) for x in table.column("name").to_pylist()}
 
 
@@ -92,8 +91,7 @@ def discover_feature_columns(
 ) -> dict[str, str | None]:
     cols = _columns(ch, features_name)
     return {
-        logical: _pick(cols, aliases)
-        for logical, aliases in FEATURE_ALIASES.items()
+        logical: _pick(cols, aliases) for logical, aliases in FEATURE_ALIASES.items()
     }
 
 
@@ -154,14 +152,13 @@ def _validate_base_relation(ch: ClickHouseResource, base_sql: str) -> None:
     extra = got - expected
     if missing:
         raise RuntimeError(
-            f"build_base_relation() is missing expected column(s): "
-            f"{sorted(missing)}."
+            f"build_base_relation() is missing expected column(s): {sorted(missing)}."
         )
     if extra:
         raise RuntimeError(
-            f"build_base_relation() exposes unexpected column(s): "
-            f"{sorted(extra)}."
+            f"build_base_relation() exposes unexpected column(s): {sorted(extra)}."
         )
+
 
 def build_base_relation(
     ch: ClickHouseResource,
@@ -189,19 +186,19 @@ def build_base_relation(
             CAST(NULL AS Nullable(Float64)) AS gc_content,
             CAST(NULL AS Nullable(Float64)) AS entropy,
             CAST(NULL AS Nullable(UInt8)) AS is_coding_region,
-            
-            if(per_token_logprob_std > 0, 
-               (mean_log_prob - min_token_logprob) / per_token_logprob_std, 
+
+            if(per_token_logprob_std > 0,
+               (mean_log_prob - min_token_logprob) / per_token_logprob_std,
                0) AS local_anomaly_z_score,
-            
+
             if(argmin_position <= 50, 1, 0) AS is_burn_in_artifact,
-            
+
             if(toFloat64(supervised_position_count) > 1,
                ((mean_log_prob * toFloat64(supervised_position_count)) - min_token_logprob) / (toFloat64(supervised_position_count) - 1),
                mean_log_prob) AS background_mean_log_prob,
-               
-            if(mean_log_prob < 0, 
-               min_token_logprob / mean_log_prob, 
+
+            if(mean_log_prob < 0,
+               min_token_logprob / mean_log_prob,
                CAST(NULL AS Nullable(Float64))) AS anomaly_depth_ratio
 
         FROM {lsrc}
@@ -212,7 +209,7 @@ def build_base_relation(
     fsrc = _source(ch, features_name)
     fc = discover_feature_columns(ch, features_name)
 
-    seq_expr = f"toFloat64(l.supervised_position_count)"
+    seq_expr = "toFloat64(l.supervised_position_count)"
 
     gc_expr = (
         f"toNullable(toFloat64(f.{_sql_ident(fc['gc_content'])}))"
@@ -248,19 +245,19 @@ def build_base_relation(
         {gc_expr} AS gc_content,
         {ent_expr} AS entropy,
         {coding_expr} AS is_coding_region,
-        
-        if(l.per_token_logprob_std > 0, 
-           (l.mean_log_prob - l.min_token_logprob) / l.per_token_logprob_std, 
+
+        if(l.per_token_logprob_std > 0,
+           (l.mean_log_prob - l.min_token_logprob) / l.per_token_logprob_std,
            0) AS local_anomaly_z_score,
-        
+
         if(l.argmin_position <= 50, 1, 0) AS is_burn_in_artifact,
-        
+
         if(toFloat64(l.supervised_position_count) > 1,
            ((l.mean_log_prob * toFloat64(l.supervised_position_count)) - l.min_token_logprob) / (toFloat64(l.supervised_position_count) - 1),
            l.mean_log_prob) AS background_mean_log_prob,
-           
-        if(l.mean_log_prob < 0, 
-           l.min_token_logprob / l.mean_log_prob, 
+
+        if(l.mean_log_prob < 0,
+           l.min_token_logprob / l.mean_log_prob,
            CAST(NULL AS Nullable(Float64))) AS anomaly_depth_ratio
 
     FROM {lsrc} AS l
@@ -272,9 +269,11 @@ def build_base_relation(
       AND isFinite(toFloat64(l.supervised_position_count))
     """
 
+
 # ---------------------------------------------------------------------------
 # Layer 1 — cohort distributions
 # ---------------------------------------------------------------------------
+
 
 def layer1_cohort(
     ch: ClickHouseResource,
@@ -318,16 +317,16 @@ def layer1_cohort(
             avg(gc_content) AS gc_mean,
             quantileExact(0.50)(gc_content) AS gc_median,
             avg(entropy) AS entropy_mean,
-            
+
             avg(local_anomaly_z_score) AS local_anomaly_z_mean,
             quantileExact(0.50)(local_anomaly_z_score) AS local_anomaly_z_median,
-            
+
             avg(background_mean_log_prob) AS bg_mean_log_prob_mean,
             quantileExact(0.50)(background_mean_log_prob) AS bg_mean_log_prob_median,
-            
+
             avg(anomaly_depth_ratio) AS anomaly_depth_ratio_mean,
             quantileExact(0.50)(anomaly_depth_ratio) AS anomaly_depth_ratio_median,
-            
+
             sum(is_burn_in_artifact) AS burn_in_artifact_count
         FROM x
         """,
@@ -353,13 +352,13 @@ def layer1_cohort(
             min(sequence_length) AS length_min,
             quantileExact(0.50)(sequence_length) AS length_median,
             max(sequence_length) AS length_max,
-            
+
             avg(mean_log_prob) AS mean_log_prob_mean,
             quantileExact(0.50)(mean_log_prob) AS mean_log_prob_median,
-            
+
             avg(perplexity) AS perplexity_mean,
             quantileExact(0.50)(per_token_logprob_std) AS heterogeneity_median,
-            
+
             quantileExact(0.50)(local_anomaly_z_score) AS local_anomaly_z_median,
             quantileExact(0.50)(background_mean_log_prob) AS bg_mean_log_prob_median,
             quantileExact(0.50)(anomaly_depth_ratio) AS anomaly_depth_ratio_median,
@@ -375,6 +374,7 @@ def layer1_cohort(
 # ---------------------------------------------------------------------------
 # Layer 2 — conditional distributions / residual models
 # ---------------------------------------------------------------------------
+
 
 def _linear_coefficients(ch: ClickHouseResource, base_sql: str) -> tuple[float, float]:
     query = f"""
@@ -400,10 +400,17 @@ def _linear_coefficients(ch: ClickHouseResource, base_sql: str) -> tuple[float, 
         raise RuntimeError("Length regression returned no usable rows.")
 
     row = result.slice(0, 1).to_pylist()[0]
-    cov_xy, var_x, mean_x, mean_y = float(row["cov_xy"]), float(row["var_x"]), float(row["mean_x"]), float(row["mean_y"])
+    cov_xy, var_x, mean_x, mean_y = (
+        float(row["cov_xy"]),
+        float(row["var_x"]),
+        float(row["mean_x"]),
+        float(row["mean_y"]),
+    )
 
     if not math.isfinite(var_x) or var_x <= 0:
-        raise RuntimeError("Cannot fit length model: sequence_length has zero variance.")
+        raise RuntimeError(
+            "Cannot fit length model: sequence_length has zero variance."
+        )
 
     slope = cov_xy / var_x
     intercept = mean_y - slope * mean_x
@@ -457,7 +464,7 @@ def layer2_length_model(
             min(sequence_length) AS length_min,
             quantileExact(0.50)(sequence_length) AS length_median,
             max(sequence_length) AS length_max,
-            
+
             quantileExact(0.50)(mean_log_prob) AS raw_likelihood_median,
             quantileExact(0.50)(length_adjusted_likelihood) AS adjusted_likelihood_median,
             quantileExact(0.50)(background_mean_log_prob) AS bg_mean_log_prob_median,
@@ -518,6 +525,7 @@ def layer2_composition_model(
     sxy, sgy, sey = exy - mx * my, egy - mg * my, eey - me * my
 
     import numpy as np
+
     X = np.array([[sxx, sxg, sxe], [sxg, sgg, sge], [sxe, sge, see]], dtype=float)
     b = np.array([sxy, sgy, sey], dtype=float)
 
@@ -547,6 +555,7 @@ def layer2_composition_model(
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
+
 
 def layer3_record_metrics(
     ch: ClickHouseResource,
@@ -641,7 +650,7 @@ def layer3_record_metrics(
         s.gc_content,
         s.entropy,
         s.is_coding_region,
-        
+
         s.local_anomaly_z_score,
         s.is_burn_in_artifact,
         s.background_mean_log_prob,
@@ -655,8 +664,8 @@ def layer3_record_metrics(
         if(sc.la_mad > 0, (s.length_adjusted_likelihood - sc.la_med) / (1.4826 * sc.la_mad), 0) AS length_adjusted_robust_z,
 
         s.length_composition_adjusted_likelihood,
-        if(isNotNull(s.length_composition_adjusted_likelihood) AND sc.ca_sd > 0, 
-           (s.length_composition_adjusted_likelihood - sc.ca_mean) / sc.ca_sd, 
+        if(isNotNull(s.length_composition_adjusted_likelihood) AND sc.ca_sd > 0,
+           (s.length_composition_adjusted_likelihood - sc.ca_mean) / sc.ca_sd,
            CAST(NULL AS Nullable(Float64))) AS length_composition_adjusted_z,
 
         if(sc.ts_sd > 0, (s.token_surprise - sc.ts_mean) / sc.ts_sd, 0) AS token_surprise_z,
@@ -716,7 +725,9 @@ def run_analysis(
             print("[3/4] Layer 2 length + composition model...")
             comp_model = layer2_composition_model(ch, base_sql, out_dir)
         else:
-            print("[3/4] Skipping composition model: GC and/or entropy column not available.")
+            print(
+                "[3/4] Skipping composition model: GC and/or entropy column not available."
+            )
     else:
         print("[3/4] Skipping composition model: no feature dataset.")
 
@@ -748,7 +759,9 @@ def _register_source(ch: ClickHouseResource, name: str, source: str) -> None:
         ch.register_dataset(name, source_path)
         return
 
-    raise ValueError("Local source must be a Parquet file or directory containing Parquet files.")
+    raise ValueError(
+        "Local source must be a Parquet file or directory containing Parquet files."
+    )
 
 
 def main() -> None:

@@ -75,7 +75,6 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -131,25 +130,21 @@ PLOT_COLORS = [
 # Utilities
 # =============================================================================
 
+
 def load_csv(input_dir: Path, filename: str) -> pd.DataFrame:
     """Load a Phase 2 CSV and report its dimensions."""
 
     path = input_dir / filename
 
     if not path.exists():
-        raise FileNotFoundError(
-            f"Required metric file does not exist:\n{path}"
-        )
+        raise FileNotFoundError(f"Required metric file does not exist:\n{path}")
 
     df = pd.read_csv(path)
 
     # Defensive header cleanup.
     df.columns = [str(c).strip() for c in df.columns]
 
-    print(
-        f"Loaded {filename}: "
-        f"{len(df):,} rows × {len(df.columns)} columns"
-    )
+    print(f"Loaded {filename}: {len(df):,} rows × {len(df.columns)} columns")
 
     return df
 
@@ -161,11 +156,7 @@ def require_columns(
 ) -> None:
     """Validate that the expected schema exists."""
 
-    missing = [
-        column
-        for column in columns
-        if column not in df.columns
-    ]
+    missing = [column for column in columns if column not in df.columns]
 
     if missing:
         raise ValueError(
@@ -210,9 +201,7 @@ def _parse_numeric_value(raw) -> float:
 
     # European decimal comma.
     try:
-        return float(
-            s.replace(".", "").replace(",", ".")
-        )
+        return float(s.replace(".", "").replace(",", "."))
     except ValueError:
         pass
 
@@ -309,6 +298,7 @@ def annotate_bar_values(
 # Statistical utilities
 # =============================================================================
 
+
 def welch_ttest_from_summary(
     mean_a: float,
     sd_a: float,
@@ -321,8 +311,8 @@ def welch_ttest_from_summary(
     Welch's t-test computed from summary statistics.
     """
 
-    se_a = (sd_a ** 2) / n_a
-    se_b = (sd_b ** 2) / n_b
+    se_a = (sd_a**2) / n_a
+    se_b = (sd_b**2) / n_b
 
     se_diff = np.sqrt(se_a + se_b)
 
@@ -332,16 +322,9 @@ def welch_ttest_from_summary(
     t_stat = (mean_a - mean_b) / se_diff
 
     df_num = (se_a + se_b) ** 2
-    df_den = (
-        (se_a ** 2) / (n_a - 1)
-        + (se_b ** 2) / (n_b - 1)
-    )
+    df_den = (se_a**2) / (n_a - 1) + (se_b**2) / (n_b - 1)
 
-    dof = (
-        df_num / df_den
-        if df_den > 0
-        else (n_a + n_b - 2)
-    )
+    dof = df_num / df_den if df_den > 0 else (n_a + n_b - 2)
 
     p_value = 2 * stats.t.sf(
         np.abs(t_stat),
@@ -361,11 +344,7 @@ def pooled_cohens_d(
 ) -> float:
     """Cohen's d using pooled standard deviation."""
 
-    pooled_var = (
-        ((n_a - 1) * sd_a ** 2
-         + (n_b - 1) * sd_b ** 2)
-        / (n_a + n_b - 2)
-    )
+    pooled_var = ((n_a - 1) * sd_a**2 + (n_b - 1) * sd_b**2) / (n_a + n_b - 2)
 
     pooled_sd = np.sqrt(pooled_var)
 
@@ -410,9 +389,7 @@ def plot_mean_ci_comparison(
         stddev_col,
         "n",
     ]:
-        plot_df[column] = coerce_numeric(
-            plot_df[column]
-        )
+        plot_df[column] = coerce_numeric(plot_df[column])
 
     plot_df = plot_df.dropna(
         subset=[
@@ -422,33 +399,20 @@ def plot_mean_ci_comparison(
         ]
     )
 
-    plot_df = plot_df[
-        plot_df["n"] > 0
-    ]
+    plot_df = plot_df[plot_df["n"] > 0]
 
     if plot_df.empty:
-        raise ValueError(
-            f"No usable rows in {source_name}."
-        )
+        raise ValueError(f"No usable rows in {source_name}.")
 
-    plot_df = (
-        plot_df
-        .sort_values(value_col)
-        .reset_index(drop=True)
-    )
+    plot_df = plot_df.sort_values(value_col).reset_index(drop=True)
 
-    sem = (
-        plot_df[stddev_col]
-        / np.sqrt(plot_df["n"])
-    )
+    sem = plot_df[stddev_col] / np.sqrt(plot_df["n"])
 
     ci95 = 1.96 * sem
 
     x = np.arange(len(plot_df))
 
-    fig, ax = plt.subplots(
-        figsize=(9, 6.5)
-    )
+    fig, ax = plt.subplots(figsize=(9, 6.5))
 
     bars = ax.bar(
         x,
@@ -458,7 +422,7 @@ def plot_mean_ci_comparison(
         alpha=0.88,
         edgecolor="black",
         linewidth=0.6,
-        color=PLOT_COLORS[:len(plot_df)],
+        color=PLOT_COLORS[: len(plot_df)],
     )
 
     if zero_reference_line:
@@ -477,8 +441,7 @@ def plot_mean_ci_comparison(
         ax.annotate(
             f"{value:.4g}\n(n={int(n):,})",
             xy=(
-                bar.get_x()
-                + bar.get_width() / 2,
+                bar.get_x() + bar.get_width() / 2,
                 bar.get_height(),
             ),
             xytext=(0, 6),
@@ -490,9 +453,7 @@ def plot_mean_ci_comparison(
 
     ax.set_xticks(x)
 
-    ax.set_xticklabels(
-        plot_df["group"].astype(str)
-    )
+    ax.set_xticklabels(plot_df["group"].astype(str))
 
     ax.set_xlabel("Group")
     ax.set_ylabel(ylabel)
@@ -510,15 +471,13 @@ def plot_mean_ci_comparison(
             plot_df.iloc[1],
         )
 
-        t_stat, p_value = (
-            welch_ttest_from_summary(
-                a[value_col],
-                a[stddev_col],
-                a["n"],
-                b[value_col],
-                b[stddev_col],
-                b["n"],
-            )
+        t_stat, p_value = welch_ttest_from_summary(
+            a[value_col],
+            a[stddev_col],
+            a["n"],
+            b[value_col],
+            b[stddev_col],
+            b["n"],
         )
 
         d = pooled_cohens_d(
@@ -531,11 +490,7 @@ def plot_mean_ci_comparison(
         )
 
         if np.isfinite(p_value):
-            sig = (
-                "significant"
-                if p_value < 0.05
-                else "not significant"
-            )
+            sig = "significant" if p_value < 0.05 else "not significant"
 
             subtitle = (
                 f"Welch's t-test: "
@@ -546,12 +501,7 @@ def plot_mean_ci_comparison(
             )
 
     ax.set_title(
-        title
-        + (
-            f"\n{subtitle}"
-            if subtitle
-            else ""
-        ),
+        title + (f"\n{subtitle}" if subtitle else ""),
         fontsize=12,
     )
 
@@ -567,6 +517,7 @@ def plot_mean_ci_comparison(
 # =============================================================================
 # 1. Sequence-length distribution
 # =============================================================================
+
 
 def plot_sequence_length_distribution(
     df: pd.DataFrame,
@@ -599,9 +550,7 @@ def plot_sequence_length_distribution(
 
     plot_df = plot_df.dropna(subset=["n"])
 
-    plot_df["length_bucket"] = (
-        plot_df["length_bucket"].astype(str)
-    )
+    plot_df["length_bucket"] = plot_df["length_bucket"].astype(str)
 
     plot_df = plot_df.sort_values(
         "length_bucket",
@@ -609,22 +558,18 @@ def plot_sequence_length_distribution(
     )
 
     if plot_df.empty:
-        raise ValueError(
-            f"{source_name} contains no usable rows."
-        )
+        raise ValueError(f"{source_name} contains no usable rows.")
 
     total = plot_df["n"].sum()
 
-    fig, ax = plt.subplots(
-        figsize=(12, 6.5)
-    )
+    fig, ax = plt.subplots(figsize=(12, 6.5))
 
     x = np.arange(len(plot_df))
 
     bars = ax.bar(
         x,
         plot_df["n"],
-        color=PLOT_COLORS[:len(plot_df)],
+        color=PLOT_COLORS[: len(plot_df)],
         alpha=0.88,
         edgecolor="black",
         linewidth=0.5,
@@ -645,17 +590,11 @@ def plot_sequence_length_distribution(
         ha="right",
     )
 
-    ax.set_xlabel(
-        "Sequence-length bucket"
-    )
+    ax.set_xlabel("Sequence-length bucket")
 
-    ax.set_ylabel(
-        "Number of sequences"
-    )
+    ax.set_ylabel("Number of sequences")
 
-    ax.set_title(
-        "Sequence-length distribution of the enriched corpus"
-    )
+    ax.set_title("Sequence-length distribution of the enriched corpus")
 
     ax.grid(
         axis="y",
@@ -681,9 +620,11 @@ def plot_sequence_length_distribution(
         "01_sequence_length_distribution.png",
     )
 
+
 # =============================================================================
 # 2. GC-content distribution
 # =============================================================================
+
 
 def plot_gc_content_distribution(
     df: pd.DataFrame,
@@ -699,9 +640,7 @@ def plot_gc_content_distribution(
         gc_bucket, n
     """
 
-    source_name = (
-        "gc_content_distribution.csv"
-    )
+    source_name = "gc_content_distribution.csv"
 
     require_columns(
         df,
@@ -714,42 +653,30 @@ def plot_gc_content_distribution(
 
     plot_df = df.copy()
 
-    plot_df["n"] = coerce_numeric(
-        plot_df["n"]
-    )
+    plot_df["n"] = coerce_numeric(plot_df["n"])
 
-    plot_df = plot_df.dropna(
-        subset=["n"]
-    )
+    plot_df = plot_df.dropna(subset=["n"])
 
-    plot_df["gc_bucket"] = (
-        plot_df["gc_bucket"].astype(str)
-    )
+    plot_df["gc_bucket"] = plot_df["gc_bucket"].astype(str)
 
     plot_df = plot_df.sort_values(
         "gc_bucket",
-        key=lambda s: s.map(
-            natural_sort_key
-        ),
+        key=lambda s: s.map(natural_sort_key),
     )
 
     if plot_df.empty:
-        raise ValueError(
-            f"{source_name} contains no usable rows."
-        )
+        raise ValueError(f"{source_name} contains no usable rows.")
 
     total = plot_df["n"].sum()
 
-    fig, ax = plt.subplots(
-        figsize=(12, 6.5)
-    )
+    fig, ax = plt.subplots(figsize=(12, 6.5))
 
     x = np.arange(len(plot_df))
 
     bars = ax.bar(
         x,
         plot_df["n"],
-        color=PLOT_COLORS[:len(plot_df)],
+        color=PLOT_COLORS[: len(plot_df)],
         alpha=0.88,
         edgecolor="black",
         linewidth=0.5,
@@ -770,17 +697,11 @@ def plot_gc_content_distribution(
         ha="right",
     )
 
-    ax.set_xlabel(
-        "GC-content bucket"
-    )
+    ax.set_xlabel("GC-content bucket")
 
-    ax.set_ylabel(
-        "Number of sequences"
-    )
+    ax.set_ylabel("Number of sequences")
 
-    ax.set_title(
-        "GC-content distribution of the enriched corpus"
-    )
+    ax.set_title("GC-content distribution of the enriched corpus")
 
     ax.grid(
         axis="y",
@@ -811,6 +732,7 @@ def plot_gc_content_distribution(
 # 3. Length × GC distribution
 # =============================================================================
 
+
 def plot_length_gc_distribution(
     df: pd.DataFrame,
     output_dir: Path,
@@ -825,9 +747,7 @@ def plot_length_gc_distribution(
         length_log_bucket, gc_bucket, n
     """
 
-    source_name = (
-        "length_gc_distribution.csv"
-    )
+    source_name = "length_gc_distribution.csv"
 
     require_columns(
         df,
@@ -841,23 +761,13 @@ def plot_length_gc_distribution(
 
     plot_df = df.copy()
 
-    plot_df["n"] = coerce_numeric(
-        plot_df["n"]
-    )
+    plot_df["n"] = coerce_numeric(plot_df["n"])
 
-    plot_df = plot_df.dropna(
-        subset=["n"]
-    )
+    plot_df = plot_df.dropna(subset=["n"])
 
-    plot_df[
-        "length_log_bucket"
-    ] = plot_df[
-        "length_log_bucket"
-    ].astype(str)
+    plot_df["length_log_bucket"] = plot_df["length_log_bucket"].astype(str)
 
-    plot_df["gc_bucket"] = (
-        plot_df["gc_bucket"].astype(str)
-    )
+    plot_df["gc_bucket"] = plot_df["gc_bucket"].astype(str)
 
     matrix = plot_df.pivot_table(
         index="gc_bucket",
@@ -879,21 +789,13 @@ def plot_length_gc_distribution(
     )
 
     if matrix.empty:
-        raise ValueError(
-            f"{source_name} contains no usable data."
-        )
+        raise ValueError(f"{source_name} contains no usable data.")
 
-    fig, ax = plt.subplots(
-        figsize=(12, 7.5)
-    )
+    fig, ax = plt.subplots(figsize=(12, 7.5))
 
-    values = matrix.to_numpy(
-        dtype=float
-    )
+    values = matrix.to_numpy(dtype=float)
 
-    log_values = np.log10(
-        values + 1
-    )
+    log_values = np.log10(values + 1)
 
     image = ax.imshow(
         log_values,
@@ -903,23 +805,13 @@ def plot_length_gc_distribution(
         cmap="viridis",
     )
 
-    ax.set_xlabel(
-        "Sequence-length bucket"
-    )
+    ax.set_xlabel("Sequence-length bucket")
 
-    ax.set_ylabel(
-        "GC-content bucket"
-    )
+    ax.set_ylabel("GC-content bucket")
 
-    ax.set_title(
-        "Broad sequence-length and GC-content coverage"
-    )
+    ax.set_title("Broad sequence-length and GC-content coverage")
 
-    ax.set_xticks(
-        np.arange(
-            len(matrix.columns)
-        )
-    )
+    ax.set_xticks(np.arange(len(matrix.columns)))
 
     ax.set_xticklabels(
         matrix.columns,
@@ -927,24 +819,16 @@ def plot_length_gc_distribution(
         ha="right",
     )
 
-    ax.set_yticks(
-        np.arange(
-            len(matrix.index)
-        )
-    )
+    ax.set_yticks(np.arange(len(matrix.index)))
 
-    ax.set_yticklabels(
-        matrix.index
-    )
+    ax.set_yticklabels(matrix.index)
 
     cbar = fig.colorbar(
         image,
         ax=ax,
     )
 
-    cbar.set_label(
-        "log10(sequence count + 1)"
-    )
+    cbar.set_label("log10(sequence count + 1)")
 
     fig.tight_layout()
 
@@ -958,6 +842,7 @@ def plot_length_gc_distribution(
 # =============================================================================
 # 4. Taxonomic depth distribution
 # =============================================================================
+
 
 def plot_taxonomy_depth_distribution(
     df: pd.DataFrame,
@@ -977,9 +862,7 @@ def plot_taxonomy_depth_distribution(
         It is not relabeled as a biological taxonomic rank.
     """
 
-    source_name = (
-        "taxonomy_depth_distribution.csv"
-    )
+    source_name = "taxonomy_depth_distribution.csv"
 
     require_columns(
         df,
@@ -992,15 +875,9 @@ def plot_taxonomy_depth_distribution(
 
     plot_df = df.copy()
 
-    plot_df["taxonomy_depth"] = (
-        coerce_numeric(
-            plot_df["taxonomy_depth"]
-        )
-    )
+    plot_df["taxonomy_depth"] = coerce_numeric(plot_df["taxonomy_depth"])
 
-    plot_df["n"] = coerce_numeric(
-        plot_df["n"]
-    )
+    plot_df["n"] = coerce_numeric(plot_df["n"])
 
     plot_df = plot_df.dropna(
         subset=[
@@ -1009,20 +886,14 @@ def plot_taxonomy_depth_distribution(
         ]
     )
 
-    plot_df = plot_df.sort_values(
-        "taxonomy_depth"
-    )
+    plot_df = plot_df.sort_values("taxonomy_depth")
 
     if plot_df.empty:
-        raise ValueError(
-            f"{source_name} contains no usable rows."
-        )
+        raise ValueError(f"{source_name} contains no usable rows.")
 
     total = plot_df["n"].sum()
 
-    fig, ax = plt.subplots(
-        figsize=(12, 6.5)
-    )
+    fig, ax = plt.subplots(figsize=(12, 6.5))
 
     bars = ax.bar(
         plot_df["taxonomy_depth"],
@@ -1044,8 +915,7 @@ def plot_taxonomy_depth_distribution(
             ax.annotate(
                 f"{int(value):,}",
                 xy=(
-                    bar.get_x()
-                    + bar.get_width() / 2,
+                    bar.get_x() + bar.get_width() / 2,
                     value,
                 ),
                 xytext=(0, 4),
@@ -1055,21 +925,13 @@ def plot_taxonomy_depth_distribution(
                 fontsize=8,
             )
 
-    ax.set_xlabel(
-        "Taxonomic annotation depth"
-    )
+    ax.set_xlabel("Taxonomic annotation depth")
 
-    ax.set_ylabel(
-        "Number of sequences"
-    )
+    ax.set_ylabel("Number of sequences")
 
-    ax.set_title(
-        "Distribution of taxonomic annotation depth"
-    )
+    ax.set_title("Distribution of taxonomic annotation depth")
 
-    ax.set_xticks(
-        plot_df["taxonomy_depth"]
-    )
+    ax.set_xticks(plot_df["taxonomy_depth"])
 
     ax.grid(
         axis="y",
@@ -1099,6 +961,7 @@ def plot_taxonomy_depth_distribution(
 # =============================================================================
 # 5. Taxonomic cardinality
 # =============================================================================
+
 
 def plot_taxonomy_cardinality(
     df: pd.DataFrame,
@@ -1132,9 +995,7 @@ def plot_taxonomy_cardinality(
     )
 
     if df.empty:
-        raise ValueError(
-            "taxonomy_cardinality.csv contains no rows."
-        )
+        raise ValueError("taxonomy_cardinality.csv contains no rows.")
 
     row = df.iloc[0]
 
@@ -1152,14 +1013,9 @@ def plot_taxonomy_cardinality(
         "Genus",
     ]
 
-    values = [
-        row[column]
-        for column in expected_columns
-    ]
+    values = [row[column] for column in expected_columns]
 
-    values = coerce_numeric(
-        pd.Series(values)
-    )
+    values = coerce_numeric(pd.Series(values))
 
     taxonomy_df = pd.DataFrame(
         {
@@ -1168,35 +1024,26 @@ def plot_taxonomy_cardinality(
         }
     )
 
-    dropped = taxonomy_df[
-        taxonomy_df["count"].isna()
-    ]["rank"].tolist()
+    dropped = taxonomy_df[taxonomy_df["count"].isna()]["rank"].tolist()
 
     if dropped:
         print(
-            "Warning: taxonomy_cardinality.csv -- "
-            f"could not parse rank(s): {dropped}"
+            f"Warning: taxonomy_cardinality.csv -- could not parse rank(s): {dropped}"
         )
 
     taxonomy_df = taxonomy_df.dropna()
 
     if taxonomy_df.empty:
-        raise ValueError(
-            "No usable taxonomy cardinality values."
-        )
+        raise ValueError("No usable taxonomy cardinality values.")
 
-    fig, ax = plt.subplots(
-        figsize=(12, 7.5)
-    )
+    fig, ax = plt.subplots(figsize=(12, 7.5))
 
-    x = np.arange(
-        len(taxonomy_df)
-    )
+    x = np.arange(len(taxonomy_df))
 
     bars = ax.bar(
         x,
         taxonomy_df["count"],
-        color=PLOT_COLORS[:len(taxonomy_df)],
+        color=PLOT_COLORS[: len(taxonomy_df)],
         alpha=0.88,
         edgecolor="black",
         linewidth=0.5,
@@ -1217,17 +1064,11 @@ def plot_taxonomy_cardinality(
         ha="right",
     )
 
-    ax.set_xlabel(
-        "Taxonomic rank"
-    )
+    ax.set_xlabel("Taxonomic rank")
 
-    ax.set_ylabel(
-        "Number of distinct taxa"
-    )
+    ax.set_ylabel("Number of distinct taxa")
 
-    ax.set_title(
-        "Distinct taxa represented across hierarchical ranks"
-    )
+    ax.set_title("Distinct taxa represented across hierarchical ranks")
 
     ax.grid(
         axis="y",
@@ -1247,6 +1088,7 @@ def plot_taxonomy_cardinality(
 # 6. Taxonomic composition
 # =============================================================================
 
+
 def plot_taxonomy_composition(
     df: pd.DataFrame,
     output_dir: Path,
@@ -1265,9 +1107,7 @@ def plot_taxonomy_composition(
     as a defensive fallback.
     """
 
-    source_name = (
-        "taxonomy_composition.csv"
-    )
+    source_name = "taxonomy_composition.csv"
 
     if "taxonomy_class" in df.columns:
         group_col = "taxonomy_class"
@@ -1288,56 +1128,39 @@ def plot_taxonomy_composition(
 
     plot_df = df.copy()
 
-    plot_df["n"] = coerce_numeric(
-        plot_df["n"]
-    )
+    plot_df["n"] = coerce_numeric(plot_df["n"])
 
-    plot_df = plot_df.dropna(
-        subset=["n"]
-    )
+    plot_df = plot_df.dropna(subset=["n"])
 
-    plot_df[group_col] = (
-        plot_df[group_col].astype(str)
-    )
+    plot_df[group_col] = plot_df[group_col].astype(str)
 
     # Combine duplicate labels defensively.
-    plot_df = (
-        plot_df
-        .groupby(group_col, as_index=False)["n"]
-        .sum()
-    )
+    plot_df = plot_df.groupby(group_col, as_index=False)["n"].sum()
 
     total = plot_df["n"].sum()
 
     plot_df = (
-        plot_df
-        .sort_values("n", ascending=False)
+        plot_df.sort_values("n", ascending=False)
         .head(top_n)
         .sort_values("n", ascending=True)
     )
 
     if plot_df.empty:
-        raise ValueError(
-            f"{source_name} contains no usable rows."
-        )
+        raise ValueError(f"{source_name} contains no usable rows.")
 
     fig_height = max(
         6,
         0.35 * len(plot_df) + 1.5,
     )
 
-    fig, ax = plt.subplots(
-        figsize=(11, fig_height)
-    )
+    fig, ax = plt.subplots(figsize=(11, fig_height))
 
-    y = np.arange(
-        len(plot_df)
-    )
+    y = np.arange(len(plot_df))
 
     bars = ax.barh(
         y,
         plot_df["n"],
-        color=PLOT_COLORS[:len(plot_df)],
+        color=PLOT_COLORS[: len(plot_df)],
         alpha=0.88,
         edgecolor="black",
         linewidth=0.5,
@@ -1345,17 +1168,11 @@ def plot_taxonomy_composition(
 
     ax.set_yticks(y)
 
-    ax.set_yticklabels(
-        plot_df[group_col]
-    )
+    ax.set_yticklabels(plot_df[group_col])
 
-    ax.set_xlabel(
-        "Number of sequences"
-    )
+    ax.set_xlabel("Number of sequences")
 
-    ax.set_ylabel(
-        "Taxonomy class"
-    )
+    ax.set_ylabel("Taxonomy class")
 
     ax.set_title(
         f"Taxonomic composition of the enriched corpus\n"
@@ -1372,18 +1189,13 @@ def plot_taxonomy_composition(
         bars,
         plot_df["n"],
     ):
-        percentage = (
-            100 * value / total
-            if total > 0
-            else 0
-        )
+        percentage = 100 * value / total if total > 0 else 0
 
         ax.annotate(
             f"{int(value):,} ({percentage:.1f}%)",
             xy=(
                 bar.get_width(),
-                bar.get_y()
-                + bar.get_height() / 2,
+                bar.get_y() + bar.get_height() / 2,
             ),
             xytext=(5, 0),
             textcoords="offset points",
@@ -1404,6 +1216,7 @@ def plot_taxonomy_composition(
 # =============================================================================
 # 7. GC-skew by coding status
 # =============================================================================
+
 
 def plot_gc_skew_coding(
     df: pd.DataFrame,
@@ -1428,6 +1241,7 @@ def plot_gc_skew_coding(
 # 8. GC-skew by taxonomy class
 # =============================================================================
 
+
 def plot_gc_skew_taxonomy(
     df: pd.DataFrame,
     output_dir: Path,
@@ -1439,9 +1253,7 @@ def plot_gc_skew_taxonomy(
     The largest classes by sample size are retained.
     """
 
-    source_name = (
-        "gc_skew_vs_taxonomy_class.csv"
-    )
+    source_name = "gc_skew_vs_taxonomy_class.csv"
 
     require_columns(
         df,
@@ -1461,9 +1273,7 @@ def plot_gc_skew_taxonomy(
         "mean_gc_skew_stddev",
         "n",
     ]:
-        plot_df[column] = coerce_numeric(
-            plot_df[column]
-        )
+        plot_df[column] = coerce_numeric(plot_df[column])
 
     plot_df = plot_df.dropna(
         subset=[
@@ -1474,8 +1284,7 @@ def plot_gc_skew_taxonomy(
     )
 
     plot_df = (
-        plot_df
-        .sort_values(
+        plot_df.sort_values(
             "n",
             ascending=False,
         )
@@ -1487,29 +1296,21 @@ def plot_gc_skew_taxonomy(
     )
 
     if plot_df.empty:
-        raise ValueError(
-            f"{source_name} contains no usable rows."
-        )
+        raise ValueError(f"{source_name} contains no usable rows.")
 
-    y = np.arange(
-        len(plot_df)
-    )
+    y = np.arange(len(plot_df))
 
     fig_height = max(
         6,
         0.35 * len(plot_df) + 1.5,
     )
 
-    fig, ax = plt.subplots(
-        figsize=(11, fig_height)
-    )
+    fig, ax = plt.subplots(figsize=(11, fig_height))
 
     ax.errorbar(
         plot_df["mean_gc_skew"],
         y,
-        xerr=plot_df[
-            "mean_gc_skew_stddev"
-        ],
+        xerr=plot_df["mean_gc_skew_stddev"],
         fmt="o",
         capsize=3,
         linewidth=1.5,
@@ -1527,21 +1328,14 @@ def plot_gc_skew_taxonomy(
 
     ax.set_yticks(y)
 
-    ax.set_yticklabels(
-        plot_df["group"].astype(str)
-    )
+    ax.set_yticklabels(plot_df["group"].astype(str))
 
-    ax.set_xlabel(
-        "Mean GC skew ± SD"
-    )
+    ax.set_xlabel("Mean GC skew ± SD")
 
-    ax.set_ylabel(
-        "Taxonomy class"
-    )
+    ax.set_ylabel("Taxonomy class")
 
     ax.set_title(
-        "GC skew across taxonomic classes\n"
-        f"Top {len(plot_df)} classes by sample size"
+        f"GC skew across taxonomic classes\nTop {len(plot_df)} classes by sample size"
     )
 
     ax.grid(
@@ -1562,15 +1356,14 @@ def plot_gc_skew_taxonomy(
 # 9. Stop-codon validation
 # =============================================================================
 
+
 def plot_stop_codon_validation(
     df: pd.DataFrame,
     output_dir: Path,
 ) -> None:
     """Plot mean stop-codon counts across reading frames."""
 
-    source_name = (
-        "stop_codon_validation.csv"
-    )
+    source_name = "stop_codon_validation.csv"
 
     require_columns(
         df,
@@ -1593,39 +1386,27 @@ def plot_stop_codon_validation(
     ]
 
     for column in frame_cols + ["n"]:
-        plot_df[column] = coerce_numeric(
-            plot_df[column]
-        )
+        plot_df[column] = coerce_numeric(plot_df[column])
 
     n_before = len(plot_df)
 
-    plot_df = plot_df.dropna(
-        subset=frame_cols
-    )
+    plot_df = plot_df.dropna(subset=frame_cols)
 
     n_after = len(plot_df)
 
     if n_after == 0:
         raise ValueError(
-            f"{source_name}: all rows were dropped after "
-            "numeric coercion."
+            f"{source_name}: all rows were dropped after numeric coercion."
         )
 
     if n_after < n_before:
-        print(
-            f"Warning: {source_name} dropped "
-            f"{n_before - n_after} row(s)."
-        )
+        print(f"Warning: {source_name} dropped {n_before - n_after} row(s).")
 
-    x = np.arange(
-        len(plot_df)
-    )
+    x = np.arange(len(plot_df))
 
     width = 0.25
 
-    fig, ax = plt.subplots(
-        figsize=(10, 6.5)
-    )
+    fig, ax = plt.subplots(figsize=(10, 6.5))
 
     bars0 = ax.bar(
         x - width,
@@ -1651,9 +1432,7 @@ def plot_stop_codon_validation(
         color=PLOT_COLORS[2],
     )
 
-    max_val = plot_df[
-        frame_cols
-    ].to_numpy().max()
+    max_val = plot_df[frame_cols].to_numpy().max()
 
     if np.isfinite(max_val) and max_val > 0:
         ax.set_ylim(
@@ -1672,8 +1451,7 @@ def plot_stop_codon_validation(
             ax.annotate(
                 f"{height:.3g}",
                 xy=(
-                    bar.get_x()
-                    + bar.get_width() / 2,
+                    bar.get_x() + bar.get_width() / 2,
                     height,
                 ),
                 xytext=(0, 3),
@@ -1685,19 +1463,13 @@ def plot_stop_codon_validation(
 
     ax.set_xticks(x)
 
-    ax.set_xticklabels(
-        plot_df["group"].astype(str)
-    )
+    ax.set_xticklabels(plot_df["group"].astype(str))
 
     ax.set_xlabel("Group")
 
-    ax.set_ylabel(
-        "Mean stop-codon count"
-    )
+    ax.set_ylabel("Mean stop-codon count")
 
-    ax.set_title(
-        "Stop-codon distribution across reading frames"
-    )
+    ax.set_title("Stop-codon distribution across reading frames")
 
     ax.legend(frameon=False)
 
@@ -1718,6 +1490,7 @@ def plot_stop_codon_validation(
 # =============================================================================
 # 10. Fickett proxy validation
 # =============================================================================
+
 
 def plot_fickett_validation(
     df: pd.DataFrame,
@@ -1742,6 +1515,7 @@ def plot_fickett_validation(
 # 11. Range sanity report
 # =============================================================================
 
+
 def write_range_sanity_summary(
     df: pd.DataFrame,
     output_dir: Path,
@@ -1752,9 +1526,7 @@ def write_range_sanity_summary(
     This is deliberately a QC report rather than a conventional figure.
     """
 
-    source_name = (
-        "range_sanity_report.csv"
-    )
+    source_name = "range_sanity_report.csv"
 
     require_columns(
         df,
@@ -1769,29 +1541,18 @@ def write_range_sanity_summary(
     )
 
     if df.empty:
-        raise ValueError(
-            f"{source_name} contains no rows."
-        )
+        raise ValueError(f"{source_name} contains no rows.")
 
     row = df.iloc[0]
 
     checks = {
-        "Homopolymer exceeds sequence length":
-            row["homopolymer_exceeds_length"],
-
-        "GC content outside [0, 1]":
-            row["gc_content_out_of_range"],
-
-        "Implausible Tm estimate":
-            row["tm_estimate_implausible"],
-
-        "Negative CpG odds":
-            row["cpg_odds_negative"],
+        "Homopolymer exceeds sequence length": row["homopolymer_exceeds_length"],
+        "GC content outside [0, 1]": row["gc_content_out_of_range"],
+        "Implausible Tm estimate": row["tm_estimate_implausible"],
+        "Negative CpG odds": row["cpg_odds_negative"],
     }
 
-    total_rows = coerce_numeric(
-        pd.Series([row["total_rows"]])
-    ).iloc[0]
+    total_rows = coerce_numeric(pd.Series([row["total_rows"]])).iloc[0]
 
     lines = [
         "PHASE 2 RANGE SANITY REPORT",
@@ -1808,35 +1569,20 @@ def write_range_sanity_summary(
             count = int(count)
 
             if total_rows > 0:
-                rate = (
-                    100.0
-                    * count
-                    / total_rows
-                )
+                rate = 100.0 * count / total_rows
 
-                lines.append(
-                    f"{name}: "
-                    f"{count:,} "
-                    f"({rate:.6f}%)"
-                )
+                lines.append(f"{name}: {count:,} ({rate:.6f}%)")
             else:
-                lines.append(
-                    f"{name}: {count:,}"
-                )
+                lines.append(f"{name}: {count:,}")
         else:
-            lines.append(
-                f"{name}: {value}"
-            )
+            lines.append(f"{name}: {value}")
 
     output_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    path = (
-        output_dir
-        / "11_range_sanity_report.txt"
-    )
+    path = output_dir / "11_range_sanity_report.txt"
 
     path.write_text(
         "\n".join(lines),
@@ -1850,13 +1596,11 @@ def write_range_sanity_summary(
 # Main
 # =============================================================================
 
+
 def main() -> None:
 
     parser = argparse.ArgumentParser(
-        description=(
-            "Generate Phase 2 visualizations "
-            "from derived genomic metrics."
-        )
+        description=("Generate Phase 2 visualizations from derived genomic metrics.")
     )
 
     parser.add_argument(
@@ -2036,9 +1780,7 @@ def main() -> None:
     print("PHASE 2 VISUALIZATION COMPLETE")
     print("=" * 80)
     print()
-    print(
-        f"Output directory: {args.output_dir}"
-    )
+    print(f"Output directory: {args.output_dir}")
 
 
 if __name__ == "__main__":

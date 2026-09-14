@@ -124,18 +124,14 @@ def register_catalog_table(
     """Expose one Faceberg table through DuckDB."""
 
     if node_id not in PIPELINE_TABLES:
-        raise KeyError(
-            f"{node_id!r} is not a catalog-managed table"
-        )
+        raise KeyError(f"{node_id!r} is not a catalog-managed table")
 
     identifier = PIPELINE_TABLES[node_id]["table"]
 
     try:
         schema, table = identifier.split(".", 1)
     except ValueError as exc:
-        raise ValueError(
-            f"Invalid catalog table identifier: {identifier!r}"
-        ) from exc
+        raise ValueError(f"Invalid catalog table identifier: {identifier!r}") from exc
 
     register_iceberg_view(
         con,

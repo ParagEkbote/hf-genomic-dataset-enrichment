@@ -10,17 +10,14 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-
 # ============================================================================
 # Carbon resources
 # ============================================================================
-
 from carbon_enrichment.resources.faceberg import (
     PipelineCatalog,
     catalog_managed_tables,
     get_catalog,
 )
-
 
 # ============================================================================
 # Filesystem helpers
@@ -238,9 +235,7 @@ def build_carbon_provenance(
             name="Pretraining corpus",
             artifact_type="source_corpus",
             metadata={
-                "repository": (
-                    "HuggingFaceBio/carbon-pretraining-corpus"
-                ),
+                "repository": ("HuggingFaceBio/carbon-pretraining-corpus"),
                 "split": "eukaryote_generator/train",
                 "access_mode": "streaming",
             },
@@ -317,9 +312,7 @@ def build_carbon_provenance(
             source="cpu_enriched",
             target="sampled_cpu",
             execution_mode="python_script",
-            purpose=(
-                "Select the compute-controlled GPU input population."
-            ),
+            purpose=("Select the compute-controlled GPU input population."),
             parameters={
                 "method": "deterministic_per_row_hash",
                 "allocation": "proportional",
@@ -337,10 +330,7 @@ def build_carbon_provenance(
             source="sampled_cpu",
             target="tokenized",
             execution_mode="dagster_asset",
-            purpose=(
-                "Convert sampled sequences into model-ready "
-                "tokenized input."
-            ),
+            purpose=("Convert sampled sequences into model-ready tokenized input."),
         ),
         ProvenanceOperation(
             id="gpu_processing",
@@ -359,9 +349,7 @@ def build_carbon_provenance(
             source="gpu_enriched",
             target="likelihood_stats",
             execution_mode="dagster_asset",
-            purpose=(
-                "Produce per-sequence model likelihood statistics."
-            ),
+            purpose=("Produce per-sequence model likelihood statistics."),
         ),
         ProvenanceOperation(
             id="embedding_generation",
@@ -369,9 +357,7 @@ def build_carbon_provenance(
             source="gpu_enriched",
             target="embeddings",
             execution_mode="dagster_asset",
-            purpose=(
-                "Produce model-derived sequence embeddings."
-            ),
+            purpose=("Produce model-derived sequence embeddings."),
         ),
     )
 
@@ -420,9 +406,7 @@ def build_carbon_provenance(
                 "source population to validate representativeness."
             ),
             parameters={
-                "comparison": (
-                    "independent_and_joint_stratum_distributions"
-                ),
+                "comparison": ("independent_and_joint_stratum_distributions"),
                 "drift_warning_threshold_pct": 2.0,
             },
         ),
@@ -485,7 +469,9 @@ def resolve_faceberg_nodes(
         describe_started = perf_counter()
         print(f"    describe({node_id})...", flush=True)
         description = catalog.describe(node_id)
-        print(f"    describe done ({perf_counter() - describe_started:.1f}s)", flush=True)
+        print(
+            f"    describe done ({perf_counter() - describe_started:.1f}s)", flush=True
+        )
 
         metadata_location = getattr(
             table,
@@ -500,9 +486,7 @@ def resolve_faceberg_nodes(
                 repository=spec["repo"],
                 config=spec["config"],
                 metadata_location=(
-                    str(metadata_location)
-                    if metadata_location is not None
-                    else None
+                    str(metadata_location) if metadata_location is not None else None
                 ),
                 snapshot_id=_get_snapshot_id(table),
                 location=description.location,
@@ -664,10 +648,7 @@ def parse_args() -> argparse.Namespace:
         "--catalog",
         type=Path,
         default=Path("carbon-catalog"),
-        help=(
-            "Local Faceberg catalog path. "
-            "Default: carbon-catalog"
-        ),
+        help=("Local Faceberg catalog path. Default: carbon-catalog"),
     )
 
     parser.add_argument(
@@ -675,8 +656,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Output provenance JSON path. "
-            "Defaults to carbon-catalog/provenance.json."
+            "Output provenance JSON path. Defaults to carbon-catalog/provenance.json."
         ),
     )
 
@@ -703,6 +683,7 @@ def parse_args() -> argparse.Namespace:
 # ============================================================================
 # Main
 # ============================================================================
+
 
 def main() -> int:
     """Generate runtime provenance from the current Carbon catalog."""
@@ -783,8 +764,7 @@ def main() -> int:
         )
     except Exception as exc:
         raise RuntimeError(
-            f"Provenance generation failed against catalog "
-            f"{catalog.uri!r}: {exc}"
+            f"Provenance generation failed against catalog {catalog.uri!r}: {exc}"
         ) from exc
 
     # ------------------------------------------------------------------
@@ -806,19 +786,13 @@ def main() -> int:
     print("Resolved nodes:")
 
     for node in provenance.resolved_nodes:
-        print(
-            f"  {node.node_id:18s}"
-            f" snapshot={node.snapshot_id or 'unknown'}"
-        )
+        print(f"  {node.node_id:18s} snapshot={node.snapshot_id or 'unknown'}")
 
     print()
     print("DuckDB executions (metadata validation):")
 
     for execution in provenance.executions:
-        print(
-            f"  {execution.query_id:40s}"
-            f" {execution.elapsed_seconds:.3f}s"
-        )
+        print(f"  {execution.query_id:40s} {execution.elapsed_seconds:.3f}s")
 
     print()
     print(f"Provenance written to: {output_path}")

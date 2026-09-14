@@ -30,14 +30,12 @@ columns are available.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
-from typing import Optional
 import math
+from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-
 
 DPI = 360
 FS = 1.12
@@ -50,22 +48,24 @@ GOLD = "#E69F00"
 PURPLE = "#7B61A8"
 GREY = "#666666"
 
-plt.rcParams.update({
-    "font.size": 10.5 * FS,
-    "axes.titlesize": 14 * FS,
-    "axes.labelsize": 11 * FS,
-    "xtick.labelsize": 9.5 * FS,
-    "ytick.labelsize": 9.5 * FS,
-    "legend.fontsize": 9.5 * FS,
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-    "axes.grid": True,
-    "grid.alpha": 0.25,
-    "grid.linewidth": 0.7,
-})
+plt.rcParams.update(
+    {
+        "font.size": 10.5 * FS,
+        "axes.titlesize": 14 * FS,
+        "axes.labelsize": 11 * FS,
+        "xtick.labelsize": 9.5 * FS,
+        "ytick.labelsize": 9.5 * FS,
+        "legend.fontsize": 9.5 * FS,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.grid": True,
+        "grid.alpha": 0.25,
+        "grid.linewidth": 0.7,
+    }
+)
 
 
-def first_existing(df: pd.DataFrame, names: list[str]) -> Optional[str]:
+def first_existing(df: pd.DataFrame, names: list[str]) -> str | None:
     return next((x for x in names if x in df.columns), None)
 
 
@@ -86,9 +86,12 @@ def num(df, col):
 
 def remove_self_neighbours(df):
     cols = {
-        "query_record_id", "neighbor_record_id",
-        "query_start", "neighbor_start",
-        "query_end", "neighbor_end",
+        "query_record_id",
+        "neighbor_record_id",
+        "query_start",
+        "neighbor_start",
+        "query_end",
+        "neighbor_end",
     }
     if not cols.issubset(df.columns):
         print("[WARN] Could not apply self-neighbour filter: identity columns missing.")
@@ -114,19 +117,22 @@ def save(fig, output, stem):
 
 
 def depth_col(df):
-    return first_existing(df, [
-        "shared_taxonomic_depth",
-        "shared_taxonomy_depth",
-        "shared_depth",
-        "taxonomy_shared_depth",
-        "common_taxonomy_depth",
-    ])
+    return first_existing(
+        df,
+        [
+            "shared_taxonomic_depth",
+            "shared_taxonomy_depth",
+            "shared_depth",
+            "taxonomy_shared_depth",
+            "common_taxonomy_depth",
+        ],
+    )
 
 
 def relationship_col(df):
-    return first_existing(df, [
-        "taxonomic_relationship", "taxonomy_relationship", "relationship"
-    ])
+    return first_existing(
+        df, ["taxonomic_relationship", "taxonomy_relationship", "relationship"]
+    )
 
 
 def similarity_col(df):
@@ -155,9 +161,12 @@ def plot_composition(df, output):
     if dc:
         cats = num(df, dc).map(composition_bin)
         order = [
-            "No shared taxonomy", "Shared depth 1–4",
-            "Shared depth 5–7", "Shared depth 8–9",
-            "Shared depth 10+", "Unknown"
+            "No shared taxonomy",
+            "Shared depth 1–4",
+            "Shared depth 5–7",
+            "Shared depth 8–9",
+            "Shared depth 10+",
+            "Unknown",
         ]
     elif rc:
         cats = df[rc].astype(str)
@@ -173,8 +182,11 @@ def plot_composition(df, output):
     palette = [BLUE, LIGHT_BLUE, TEAL, GOLD, ORANGE, GREY]
     fig, ax = plt.subplots(figsize=(10.5, 6.6))
     bars = ax.bar(
-        np.arange(len(pct)), pct.values,
-        color=palette[:len(pct)], edgecolor="black", linewidth=0.5
+        np.arange(len(pct)),
+        pct.values,
+        color=palette[: len(pct)],
+        edgecolor="black",
+        linewidth=0.5,
     )
 
     ax.set_xticks(np.arange(len(pct)))
@@ -216,10 +228,12 @@ def plot_similarity_depth(df, output):
         print("[SKIP] similarity-by-depth: required columns missing")
         return
 
-    tmp = pd.DataFrame({
-        "depth": pd.to_numeric(df[dc], errors="coerce"),
-        "similarity": pd.to_numeric(df[sc], errors="coerce"),
-    })
+    tmp = pd.DataFrame(
+        {
+            "depth": pd.to_numeric(df[dc], errors="coerce"),
+            "similarity": pd.to_numeric(df[sc], errors="coerce"),
+        }
+    )
 
     tmp = tmp.replace([np.inf, -np.inf], np.nan).dropna()
 
@@ -233,13 +247,15 @@ def plot_similarity_depth(df, output):
     for depth, group in tmp.groupby("depth", sort=True):
         values = group["similarity"].to_numpy(dtype=float)
 
-        rows.append({
-            "depth": float(depth),
-            "median": float(np.median(values)),
-            "q25": float(np.percentile(values, 25)),
-            "q75": float(np.percentile(values, 75)),
-            "n": int(len(values)),
-        })
+        rows.append(
+            {
+                "depth": float(depth),
+                "median": float(np.median(values)),
+                "q25": float(np.percentile(values, 25)),
+                "q75": float(np.percentile(values, 75)),
+                "n": int(len(values)),
+            }
+        )
 
     s = pd.DataFrame(rows).sort_values("depth").reset_index(drop=True)
 
@@ -253,10 +269,7 @@ def plot_similarity_depth(df, output):
         f"({len(s)} depths)"
     )
 
-    print(
-        f"[PLOT] Similarity range: "
-        f"{s['median'].min():.6f}–{s['median'].max():.6f}"
-    )
+    print(f"[PLOT] Similarity range: {s['median'].min():.6f}–{s['median'].max():.6f}")
 
     fig, ax = plt.subplots(figsize=(10.5, 6.6))
 
@@ -283,9 +296,7 @@ def plot_similarity_depth(df, output):
 
     ax.set_xlabel("Shared taxonomy depth")
     ax.set_ylabel("Cosine similarity")
-    ax.set_title(
-        "Cosine similarity increases with shared taxonomy depth"
-    )
+    ax.set_title("Cosine similarity increases with shared taxonomy depth")
 
     ax.legend(frameon=False)
 
@@ -324,10 +335,12 @@ def plot_relationship_boxplot(df, output):
         print("[SKIP] relationship boxplot: required columns missing")
         return
 
-    tmp = pd.DataFrame({
-        "relationship": df[rc].astype(str),
-        "similarity": num(df, sc),
-    }).dropna()
+    tmp = pd.DataFrame(
+        {
+            "relationship": df[rc].astype(str),
+            "similarity": num(df, sc),
+        }
+    ).dropna()
 
     if tmp.empty:
         print("[SKIP] relationship boxplot: no valid observations")
@@ -341,24 +354,15 @@ def plot_relationship_boxplot(df, output):
         # Use the numeric shared depth for ordering.
         # Terminal-taxonomy relationships are placed after the deepest
         # shared-prefix depth.
-        relationship_depth = (
-            tmp.groupby("relationship")["depth"]
-            .median()
-            .sort_values()
-        )
+        relationship_depth = tmp.groupby("relationship")["depth"].median().sort_values()
 
         order = relationship_depth.index.tolist()
 
         terminal_names = [
-            r for r in order
-            if "terminal" in r.lower()
-            or "same_tax" in r.lower()
+            r for r in order if "terminal" in r.lower() or "same_tax" in r.lower()
         ]
 
-        non_terminal = [
-            r for r in order
-            if r not in terminal_names
-        ]
+        non_terminal = [r for r in order if r not in terminal_names]
 
         order = non_terminal + terminal_names
     else:
@@ -366,14 +370,10 @@ def plot_relationship_boxplot(df, output):
             tmp.groupby("relationship")["similarity"]
             .median()
             .sort_values()
-            .index
-            .tolist()
+            .index.tolist()
         )
 
-    data = [
-        tmp.loc[tmp["relationship"] == r, "similarity"].to_numpy()
-        for r in order
-    ]
+    data = [tmp.loc[tmp["relationship"] == r, "similarity"].to_numpy() for r in order]
 
     def pretty_relationship(r):
         r_lower = r.lower()
@@ -452,9 +452,11 @@ def plot_property(df, xnames, xlabel, title, stem, output, color):
         print(f"[SKIP] {stem}: required columns missing")
         return
 
-    tmp = pd.DataFrame({
-        "x": num(df, xc), "y": num(df, sc)
-    }).replace([np.inf, -np.inf], np.nan).dropna()
+    tmp = (
+        pd.DataFrame({"x": num(df, xc), "y": num(df, sc)})
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+    )
 
     if tmp.empty:
         return
@@ -463,19 +465,27 @@ def plot_property(df, xnames, xlabel, title, stem, output, color):
 
     fig, ax = plt.subplots(figsize=(10.5, 6.6))
     ax.scatter(
-        sample.x, sample.y, s=5, alpha=.16,
-        color=color, linewidths=0, rasterized=True
+        sample.x, sample.y, s=5, alpha=0.16, color=color, linewidths=0, rasterized=True
     )
 
     try:
-        bins = pd.qcut(tmp.x, q=min(30, max(8, int(math.sqrt(len(tmp))))),
-                       duplicates="drop")
-        trend = tmp.assign(bin=bins).groupby("bin", observed=True).agg(
-            x=("x", "median"), y=("y", "median")
-        ).dropna()
+        bins = pd.qcut(
+            tmp.x, q=min(30, max(8, int(math.sqrt(len(tmp))))), duplicates="drop"
+        )
+        trend = (
+            tmp.assign(bin=bins)
+            .groupby("bin", observed=True)
+            .agg(x=("x", "median"), y=("y", "median"))
+            .dropna()
+        )
         ax.plot(
-            trend.x, trend.y, marker="o", markersize=4,
-            linewidth=2, color=ORANGE, label="Binned median"
+            trend.x,
+            trend.y,
+            marker="o",
+            markersize=4,
+            linewidth=2,
+            color=ORANGE,
+            label="Binned median",
         )
         ax.legend(frameon=False)
     except ValueError:
@@ -565,10 +575,16 @@ def plot_consistency(df, output):
         if y.dropna().max() <= 1:
             y = y * 100
 
-        tmp = pd.DataFrame({
-            "k": x,
-            "agreement": y,
-        }).dropna().sort_values("k")
+        tmp = (
+            pd.DataFrame(
+                {
+                    "k": x,
+                    "agreement": y,
+                }
+            )
+            .dropna()
+            .sort_values("k")
+        )
 
         if tmp.empty:
             continue
@@ -641,10 +657,11 @@ def plot_correlations(df, output):
         print("[SKIP] correlations: variable/rho columns missing")
         return
 
-    tmp = pd.DataFrame({
-        "variable": df[vc].astype(str),
-        "rho": num(df, rc)
-    }).dropna().sort_values("rho")
+    tmp = (
+        pd.DataFrame({"variable": df[vc].astype(str), "rho": num(df, rc)})
+        .dropna()
+        .sort_values("rho")
+    )
 
     label_map = {
         "delta_gc": "GC-content difference (ΔGC)",
@@ -652,9 +669,7 @@ def plot_correlations(df, output):
         "delta_log_length": "Log-length difference (Δlog-length)",
         "shared_taxonomic_depth": "Shared taxonomy depth",
     }
-    tmp["display_variable"] = (
-        tmp["variable"].map(label_map).fillna(tmp["variable"])
-    )
+    tmp["display_variable"] = tmp["variable"].map(label_map).fillna(tmp["variable"])
 
     fig, ax = plt.subplots(figsize=(11, 6.8))
     colors = [ORANGE if x < 0 else BLUE for x in tmp.rho]
@@ -663,7 +678,7 @@ def plot_correlations(df, output):
         tmp.rho,
         color=colors,
         edgecolor="black",
-        linewidth=.4,
+        linewidth=0.4,
     )
     ax.axvline(0, linewidth=1)
     ax.set_yticks(np.arange(len(tmp)))
@@ -726,21 +741,27 @@ def main():
         ["delta_gc", "abs_delta_gc", "gc_difference", "delta_gc_content"],
         "Absolute GC-content difference (ΔGC)",
         "Embedding similarity vs GC-content difference",
-        "knn_similarity_vs_delta_gc", out, BLUE
+        "knn_similarity_vs_delta_gc",
+        out,
+        BLUE,
     )
     plot_property(
         seq,
         ["delta_log_length", "abs_delta_log_length", "log_length_difference"],
         "Absolute log-length difference (Δlog-length)",
         "Embedding similarity vs sequence-length difference",
-        "knn_similarity_vs_delta_log_length", out, TEAL
+        "knn_similarity_vs_delta_log_length",
+        out,
+        TEAL,
     )
     plot_property(
         seq,
         ["delta_gc_skew", "abs_delta_gc_skew", "gc_skew_difference"],
         "Absolute GC-skew difference (ΔGC-skew)",
         "Embedding similarity vs GC-skew difference",
-        "knn_similarity_vs_delta_gc_skew", out, PURPLE
+        "knn_similarity_vs_delta_gc_skew",
+        out,
+        PURPLE,
     )
 
     consistency = load_csv(inp / "knn_taxonomic_consistency.csv")

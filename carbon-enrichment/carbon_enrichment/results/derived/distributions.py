@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import argparse
 import csv
-from dataclasses import dataclass, field
-from pathlib import Path
 import math
 import sys
 import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
-from pyarrow import csv as pa_csv
 from numba import njit, prange
+from pyarrow import csv as pa_csv
 
 from carbon_enrichment.resources.clickhouse import ClickHouseResource
-
 
 # ----------------------------------------------------------------------
 # Constants
@@ -43,9 +43,7 @@ TAXONOMY_RANKS = [
     "genus",
 ]
 
-TAXONOMY_CLASS_INDEX = (
-    TAXONOMY_RANKS.index("class") + 1
-)
+TAXONOMY_CLASS_INDEX = TAXONOMY_RANKS.index("class") + 1
 
 # Histogram configuration matching the previous reports.
 LENGTH_LOG_MIN = 1.5
@@ -73,10 +71,7 @@ def taxonomy_rank_expr(
     ClickHouse's splitByChar/array indices are 1-based, same as DuckDB.
     """
     if rank not in TAXONOMY_RANKS:
-        raise ValueError(
-            f"Unknown rank {rank!r}; "
-            f"expected one of {TAXONOMY_RANKS}"
-        )
+        raise ValueError(f"Unknown rank {rank!r}; expected one of {TAXONOMY_RANKS}")
 
     idx = TAXONOMY_RANKS.index(rank) + 1
 
@@ -95,8 +90,7 @@ def taxonomy_rank_cardinality(
     No intermediate materialization is required.
     """
     select_clauses = ", ".join(
-        f"uniqExact({taxonomy_rank_expr(rank, column)}) "
-        f"AS {rank}_distinct_count"
+        f"uniqExact({taxonomy_rank_expr(rank, column)}) AS {rank}_distinct_count"
         for rank in TAXONOMY_RANKS
     )
 
@@ -141,14 +135,9 @@ class RunningStats:
         if batch_count <= 0:
             return
 
-        batch_mean = (
-            batch_sum / batch_count
-        )
+        batch_mean = batch_sum / batch_count
 
-        batch_m2 = (
-            batch_sum_sq
-            - batch_count * batch_mean * batch_mean
-        )
+        batch_m2 = batch_sum_sq - batch_count * batch_mean * batch_mean
 
         # Protect against tiny floating-point negative values.
         batch_m2 = max(
@@ -162,30 +151,13 @@ class RunningStats:
             self.m2 = batch_m2
             return
 
-        total_count = (
-            self.count + batch_count
-        )
+        total_count = self.count + batch_count
 
-        delta = (
-            batch_mean - self.mean
-        )
+        delta = batch_mean - self.mean
 
-        self.m2 += (
-            batch_m2
-            + (
-                delta
-                * delta
-                * self.count
-                * batch_count
-                / total_count
-            )
-        )
+        self.m2 += batch_m2 + (delta * delta * self.count * batch_count / total_count)
 
-        self.mean += (
-            delta
-            * batch_count
-            / total_count
-        )
+        self.mean += delta * batch_count / total_count
 
         self.count = total_count
 
@@ -216,18 +188,14 @@ class GroupedStats:
     is performed with NumPy bincount rather than a Python row loop.
     """
 
-    groups: dict[str, RunningStats] = field(
-        default_factory=dict
-    )
+    groups: dict[str, RunningStats] = field(default_factory=dict)
 
     def update(
         self,
         group_array: pa.Array,
         values: dict[str, np.ndarray],
     ) -> None:
-        encoded = pc.dictionary_encode(
-            group_array
-        )
+        encoded = pc.dictionary_encode(group_array)
 
         dictionary = encoded.dictionary
         codes = np.asarray(
@@ -282,9 +250,7 @@ class GroupedStats:
         labels = dictionary.to_pylist()
 
         for group_idx, label in enumerate(labels):
-            count = int(
-                counts[group_idx]
-            )
+            count = int(counts[group_idx])
 
             if count == 0:
                 continue
@@ -301,12 +267,8 @@ class GroupedStats:
             # instances.
             stats.merge(
                 count,
-                float(
-                    sums["_value"][group_idx]
-                ),
-                float(
-                    sums_sq["_value"][group_idx]
-                ),
+                float(sums["_value"][group_idx]),
+                float(sums_sq["_value"][group_idx]),
             )
 
 
@@ -421,9 +383,7 @@ def _fused_sequence_stats(
     valid_bases = 0
 
     for i in range(n):
-        idx = _base_index(
-            seq[i]
-        )
+        idx = _base_index(seq[i])
 
         if idx == -1:
             cur_run = 1
@@ -449,44 +409,21 @@ def _fused_sequence_stats(
 
         b0, b1, b2 = b1, b2, idx
 
-        if (
-            b0 != -1
-            and b1 != -1
-        ):
+        if b0 != -1 and b1 != -1:
             dinuc_counts[
                 b0,
                 b1,
             ] += 1
 
-        if (
-            b0 != -1
-            and b1 != -1
-            and b2 != -1
-        ):
-            frame = (
-                (i - 2) % 3
-            )
+        if b0 != -1 and b1 != -1 and b2 != -1:
+            frame = (i - 2) % 3
 
             if (
-                (
-                    b0 == T
-                    and b1 == A
-                    and b2 == A
-                )
-                or (
-                    b0 == T
-                    and b1 == A
-                    and b2 == G
-                )
-                or (
-                    b0 == T
-                    and b1 == G
-                    and b2 == A
-                )
+                (b0 == T and b1 == A and b2 == A)
+                or (b0 == T and b1 == A and b2 == G)
+                or (b0 == T and b1 == G and b2 == A)
             ):
-                stop_frame_counts[
-                    frame
-                ] += 1
+                stop_frame_counts[frame] += 1
 
         codon_pos_counts[
             i % 3,
@@ -507,61 +444,27 @@ def _fused_sequence_stats(
             0.0,
         )
 
-    gc = (
-        counts[1]
-        + counts[2]
-    )
+    gc = counts[1] + counts[2]
 
-    gc_content = (
-        gc / valid_bases
-    )
+    gc_content = gc / valid_bases
 
-    gc_skew = (
-        (counts[2] - counts[1]) / gc
-        if gc > 0
-        else 0.0
-    )
+    gc_skew = (counts[2] - counts[1]) / gc if gc > 0 else 0.0
 
-    purine = (
-        counts[0]
-        + counts[2]
-    )
+    purine = counts[0] + counts[2]
 
-    pyrimidine = (
-        counts[1]
-        + counts[3]
-    )
+    pyrimidine = counts[1] + counts[3]
 
-    purine_pyrimidine_skew = (
-        purine / pyrimidine
-        if pyrimidine > 0
-        else np.inf
-    )
+    purine_pyrimidine_skew = purine / pyrimidine if pyrimidine > 0 else np.inf
 
-    total_dinuc = (
-        valid_bases - 1
-        if valid_bases > 1
-        else 1
-    )
+    total_dinuc = valid_bases - 1 if valid_bases > 1 else 1
 
-    p_c = (
-        counts[1] / valid_bases
-    )
+    p_c = counts[1] / valid_bases
 
-    p_g = (
-        counts[2] / valid_bases
-    )
+    p_g = counts[2] / valid_bases
 
-    p_cg = (
-        dinuc_counts[1, 2]
-        / total_dinuc
-    )
+    p_cg = dinuc_counts[1, 2] / total_dinuc
 
-    cpg_odds_ratio = (
-        p_cg / (p_c * p_g)
-        if p_c > 0 and p_g > 0
-        else 0.0
-    )
+    cpg_odds_ratio = p_cg / (p_c * p_g) if p_c > 0 and p_g > 0 else 0.0
 
     codon_freqs = np.zeros(
         (3, 4),
@@ -569,9 +472,7 @@ def _fused_sequence_stats(
     )
 
     for pos in range(3):
-        pos_total = (
-            codon_pos_counts[pos].sum()
-        )
+        pos_total = codon_pos_counts[pos].sum()
 
         if pos_total > 0:
             for base in range(4):
@@ -586,16 +487,9 @@ def _fused_sequence_stats(
                     / pos_total
                 )
 
-    fickett_proxy_variance = (
-        np.var(codon_freqs)
-    )
+    fickett_proxy_variance = np.var(codon_freqs)
 
-    tm_estimate = (
-        64.9
-        + 41.0
-        * (gc - 16.4)
-        / valid_bases
-    )
+    tm_estimate = 64.9 + 41.0 * (gc - 16.4) / valid_bases
 
     return (
         gc_content,
@@ -622,9 +516,7 @@ def compute_batch_stats(
     """
     Compute derived sequence statistics for one Arrow batch.
     """
-    n_seqs = (
-        offsets.shape[0] - 1
-    )
+    n_seqs = offsets.shape[0] - 1
 
     gc_content_out = np.zeros(n_seqs, dtype=np.float64)
     gc_skew_out = np.zeros(n_seqs, dtype=np.float64)
@@ -684,24 +576,18 @@ def _sequences_to_flat_buffer(
     No Python string is created for each sequence.
     """
     if sequences.null_count:
-        raise ValueError(
-            "Sequence column contains NULL values."
-        )
+        raise ValueError("Sequence column contains NULL values.")
 
     buffers = sequences.buffers()
 
     if len(buffers) < 3:
-        raise ValueError(
-            "Unexpected Arrow string buffer layout."
-        )
+        raise ValueError("Unexpected Arrow string buffer layout.")
 
     offset_buffer = buffers[1]
     data_buffer = buffers[2]
 
     if offset_buffer is None:
-        raise ValueError(
-            "Sequence Arrow array has no offset buffer."
-        )
+        raise ValueError("Sequence Arrow array has no offset buffer.")
 
     if data_buffer is None:
         offsets = np.zeros(len(sequences) + 1, dtype=np.int64)
@@ -761,15 +647,9 @@ def _width_bucket(
     result[above] = buckets + 1
 
     if np.any(inside):
-        scaled = (
-            (values[inside] - lower)
-            / (upper - lower)
-            * buckets
-        )
+        scaled = (values[inside] - lower) / (upper - lower) * buckets
 
-        result[inside] = (
-            np.floor(scaled).astype(np.int32) + 1
-        )
+        result[inside] = np.floor(scaled).astype(np.int32) + 1
 
     result[~finite] = 0
 
@@ -861,15 +741,11 @@ class Phase2Aggregates:
             GC_BUCKETS,
         )
 
-        flattened = (
-            length_bucket * (GC_BUCKETS + 2) + gc_bucket
-        )
+        flattened = length_bucket * (GC_BUCKETS + 2) + gc_bucket
 
         counts = np.bincount(
             flattened,
-            minlength=(
-                (LENGTH_LOG_BUCKETS + 2) * (GC_BUCKETS + 2)
-            ),
+            minlength=((LENGTH_LOG_BUCKETS + 2) * (GC_BUCKETS + 2)),
         )
 
         self.length_gc_hist += counts.reshape(self.length_gc_hist.shape)
@@ -1065,9 +941,7 @@ def analyze_source(
     db = ClickHouseResource()
 
     try:
-        if source_text.startswith(
-            "https://huggingface.co/datasets/"
-        ):
+        if source_text.startswith("https://huggingface.co/datasets/"):
             db.register_hf_dataset(
                 "phase2_source",
                 source_text,
@@ -1093,9 +967,7 @@ def analyze_source(
 
         total_rows = _count_source_rows(db, source_expr)
 
-
         n_batches = (total_rows + BATCH_SIZE - 1) // BATCH_SIZE
-
 
         aggregates = Phase2Aggregates()
 
@@ -1107,9 +979,7 @@ def analyze_source(
         rechunked = _rechunk_batches(raw_batches, BATCH_SIZE)
 
         for batch in rechunked:
-            flat_bytes, offsets = _sequences_to_flat_buffer(
-            batch.column("sequence")
-            )
+            flat_bytes, offsets = _sequences_to_flat_buffer(batch.column("sequence"))
 
             lengths = np.diff(offsets).astype(np.int64, copy=False)
 
@@ -1141,7 +1011,6 @@ def analyze_source(
                 coding_group=batch.column("coding_group"),
                 taxonomy_class=batch.column("taxonomy_class"),
             )
-
 
         return aggregates
 
@@ -1252,9 +1121,7 @@ def main() -> None:
     parser.add_argument(
         "--source-dir",
         type=Path,
-        help=(
-            "Deprecated alias for --source when using a local Parquet directory."
-        ),
+        help=("Deprecated alias for --source when using a local Parquet directory."),
     )
     parser.add_argument(
         "--output-dir",
@@ -1285,8 +1152,11 @@ def main() -> None:
     print(f"Writing CSV reports to: {out_dir.resolve()}")
 
     _write_csv(_length_gc_report(aggregates), out_dir / "length_gc_distribution.csv")
-    _write_csv(_grouped_report(aggregates.coding_gc_skew, "mean_gc_skew"), out_dir / "gc_skew_vs_is_coding_region.csv")
-    
+    _write_csv(
+        _grouped_report(aggregates.coding_gc_skew, "mean_gc_skew"),
+        out_dir / "gc_skew_vs_is_coding_region.csv",
+    )
+
     stop_codon_data = [
         {
             "group": group,
@@ -1299,17 +1169,21 @@ def main() -> None:
     ]
     _write_csv(stop_codon_data, out_dir / "stop_codon_validation.csv")
 
-    _write_csv(_grouped_report(aggregates.coding_fickett, "mean_variance"), out_dir / "fickett_proxy_validation.csv")
-    _write_csv(_grouped_report(aggregates.taxonomy_gc_skew, "mean_gc_skew"), out_dir / "gc_skew_vs_taxonomy_class.csv")
+    _write_csv(
+        _grouped_report(aggregates.coding_fickett, "mean_variance"),
+        out_dir / "fickett_proxy_validation.csv",
+    )
+    _write_csv(
+        _grouped_report(aggregates.taxonomy_gc_skew, "mean_gc_skew"),
+        out_dir / "gc_skew_vs_taxonomy_class.csv",
+    )
     _write_csv([_range_sanity_report(aggregates)], out_dir / "range_sanity_report.csv")
 
     db = ClickHouseResource()
     try:
         source_text = str(source)
 
-        if source_text.startswith(
-            "https://huggingface.co/datasets/"
-        ):
+        if source_text.startswith("https://huggingface.co/datasets/"):
             db.register_hf_dataset("phase2_source", source_text)
             source_expr = db.source_expr("phase2_source")
         else:
@@ -1321,10 +1195,10 @@ def main() -> None:
 
         cardinality_table = taxonomy_rank_cardinality(db, source_expr)
         pa_csv.write_csv(cardinality_table, out_dir / "taxonomy_rank_cardinality.csv")
-        
+
     finally:
         db.close()
-        
+
     print("All reports saved successfully.")
 
 

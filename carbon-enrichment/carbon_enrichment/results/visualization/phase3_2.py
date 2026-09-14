@@ -42,8 +42,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import math
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -51,15 +49,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 
 from carbon_enrichment.resources.clickhouse import (
-    ClickHouseResource,
     ClickHouseConfig,
+    ClickHouseResource,
 )
-
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -113,6 +109,7 @@ LOGGER = logging.getLogger("level3_knn_analysis")
 # Logging
 # ---------------------------------------------------------------------------
 
+
 def configure_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -123,6 +120,7 @@ def configure_logging() -> None:
 # ---------------------------------------------------------------------------
 # KNN conversion
 # ---------------------------------------------------------------------------
+
 
 def convert_knn_csv_to_parquet(
     csv_path: Path,
@@ -148,10 +146,7 @@ def convert_knn_csv_to_parquet(
     missing = [c for c in REQUIRED_KNN_COLUMNS if c not in columns]
 
     if missing:
-        raise ValueError(
-            "KNN file is missing required columns: "
-            + ", ".join(missing)
-        )
+        raise ValueError("KNN file is missing required columns: " + ", ".join(missing))
 
     LOGGER.info(
         "KNN rows: %s | columns: %s",
@@ -172,6 +167,7 @@ def convert_knn_csv_to_parquet(
 # ---------------------------------------------------------------------------
 # ClickHouse query
 # ---------------------------------------------------------------------------
+
 
 def build_analysis_query(
     knn_source: str,
@@ -413,6 +409,7 @@ ORDER BY
 # Query execution
 # ---------------------------------------------------------------------------
 
+
 def load_knn_metadata(
     clickhouse: ClickHouseResource,
 ) -> pd.DataFrame:
@@ -440,6 +437,7 @@ def load_knn_metadata(
 # ---------------------------------------------------------------------------
 # Derived CSV 1
 # ---------------------------------------------------------------------------
+
 
 def make_similarity_by_rank(
     df: pd.DataFrame,
@@ -470,14 +468,13 @@ def make_similarity_by_rank(
 # Derived CSV 2
 # ---------------------------------------------------------------------------
 
+
 def make_taxonomic_consistency(
     df: pd.DataFrame,
     output: Path,
 ) -> None:
 
-    valid = df.dropna(
-        subset=["query_taxonomy", "neighbor_taxonomy"]
-    ).copy()
+    valid = df.dropna(subset=["query_taxonomy", "neighbor_taxonomy"]).copy()
 
     rows = []
 
@@ -497,36 +494,17 @@ def make_taxonomic_consistency(
 
         query_count = grouped.ngroups
 
-        same_terminal = (
-            grouped["same_terminal_taxonomy"]
-            .max()
-            .mean()
-        )
+        same_terminal = grouped["same_terminal_taxonomy"].max().mean()
 
-        depth1 = (
-            (grouped["shared_taxonomic_depth"].max() >= 1)
-            .mean()
-        )
+        depth1 = (grouped["shared_taxonomic_depth"].max() >= 1).mean()
 
-        depth3 = (
-            (grouped["shared_taxonomic_depth"].max() >= 3)
-            .mean()
-        )
+        depth3 = (grouped["shared_taxonomic_depth"].max() >= 3).mean()
 
-        depth5 = (
-            (grouped["shared_taxonomic_depth"].max() >= 5)
-            .mean()
-        )
+        depth5 = (grouped["shared_taxonomic_depth"].max() >= 5).mean()
 
-        depth8 = (
-            (grouped["shared_taxonomic_depth"].max() >= 8)
-            .mean()
-        )
+        depth8 = (grouped["shared_taxonomic_depth"].max() >= 8).mean()
 
-        depth10 = (
-            (grouped["shared_taxonomic_depth"].max() >= 10)
-            .mean()
-        )
+        depth10 = (grouped["shared_taxonomic_depth"].max() >= 10).mean()
 
         rows.append(
             {
@@ -552,6 +530,7 @@ def make_taxonomic_consistency(
 # ---------------------------------------------------------------------------
 # Derived CSV 3
 # ---------------------------------------------------------------------------
+
 
 def make_taxonomic_relationships(
     df: pd.DataFrame,
@@ -587,6 +566,7 @@ def make_taxonomic_relationships(
 # ---------------------------------------------------------------------------
 # Derived CSV 4
 # ---------------------------------------------------------------------------
+
 
 def make_sequence_properties(
     df: pd.DataFrame,
@@ -627,6 +607,7 @@ def make_sequence_properties(
 # Additional biological-analysis CSVs
 # ---------------------------------------------------------------------------
 
+
 def make_taxonomy_depth_similarity_summary(
     df: pd.DataFrame,
     output: Path,
@@ -637,18 +618,14 @@ def make_taxonomy_depth_similarity_summary(
     This is the main quantitative table behind the hierarchical-taxonomy
     interpretation of the KNN graph.
     """
-    valid = df.dropna(
-        subset=["cosine_similarity", "shared_taxonomic_depth"]
-    ).copy()
+    valid = df.dropna(subset=["cosine_similarity", "shared_taxonomic_depth"]).copy()
 
     valid["shared_taxonomic_depth"] = pd.to_numeric(
         valid["shared_taxonomic_depth"],
         errors="coerce",
     )
     valid = valid.dropna(subset=["shared_taxonomic_depth"])
-    valid["shared_taxonomic_depth"] = (
-        valid["shared_taxonomic_depth"].astype(int)
-    )
+    valid["shared_taxonomic_depth"] = valid["shared_taxonomic_depth"].astype(int)
 
     result = (
         valid.groupby("shared_taxonomic_depth")["cosine_similarity"]
@@ -705,9 +682,7 @@ def make_biological_correlations(
         if column not in valid.columns:
             continue
 
-        subset = valid[
-            ["cosine_similarity", column]
-        ].dropna()
+        subset = valid[["cosine_similarity", column]].dropna()
 
         if len(subset) < 3:
             continue
@@ -742,9 +717,7 @@ def make_taxonomic_relationship_summary(
     """
     Pair-level biological summary by taxonomic relationship.
     """
-    valid = df.dropna(
-        subset=["cosine_similarity", "taxonomic_relationship"]
-    ).copy()
+    valid = df.dropna(subset=["cosine_similarity", "taxonomic_relationship"]).copy()
 
     result = (
         valid.groupby("taxonomic_relationship")
@@ -845,9 +818,7 @@ def make_biological_property_bins(
         if value_column not in df.columns:
             continue
 
-        subset = df[
-            ["cosine_similarity", value_column]
-        ].dropna().copy()
+        subset = df[["cosine_similarity", value_column]].dropna().copy()
 
         if subset.empty:
             continue
@@ -910,6 +881,7 @@ def make_biological_property_bins(
 # Plot 1
 # ---------------------------------------------------------------------------
 
+
 def plot_similarity_by_rank(
     df: pd.DataFrame,
     output: Path,
@@ -971,13 +943,12 @@ def plot_similarity_by_rank(
 # Plot 2
 # ---------------------------------------------------------------------------
 
+
 def plot_taxonomic_agreement(
     df: pd.DataFrame,
     output: Path,
 ) -> None:
-    valid = df.dropna(
-        subset=["query_taxonomy", "neighbor_taxonomy"]
-    )
+    valid = df.dropna(subset=["query_taxonomy", "neighbor_taxonomy"])
 
     rows = []
 
@@ -999,28 +970,13 @@ def plot_taxonomic_agreement(
             {
                 "k": k,
                 "same_terminal_taxonomy": (
-                    grouped["same_terminal_taxonomy"]
-                    .max()
-                    .mean()
-                    * 100
+                    grouped["same_terminal_taxonomy"].max().mean() * 100
                 ),
                 "shared_depth_ge_5": (
-                    (
-                        grouped["shared_taxonomic_depth"]
-                        .max()
-                        >= 5
-                    )
-                    .mean()
-                    * 100
+                    (grouped["shared_taxonomic_depth"].max() >= 5).mean() * 100
                 ),
                 "shared_depth_ge_10": (
-                    (
-                        grouped["shared_taxonomic_depth"]
-                        .max()
-                        >= 10
-                    )
-                    .mean()
-                    * 100
+                    (grouped["shared_taxonomic_depth"].max() >= 10).mean() * 100
                 ),
             }
         )
@@ -1094,13 +1050,12 @@ def plot_taxonomic_agreement(
 # Plot 3
 # ---------------------------------------------------------------------------
 
+
 def plot_knn_taxonomic_composition(
     df: pd.DataFrame,
     output: Path,
 ) -> None:
-    valid = df.dropna(
-        subset=["shared_taxonomic_depth"]
-    ).copy()
+    valid = df.dropna(subset=["shared_taxonomic_depth"]).copy()
 
     categories = pd.cut(
         valid["shared_taxonomic_depth"],
@@ -1115,11 +1070,7 @@ def plot_knn_taxonomic_composition(
         ],
     )
 
-    counts = (
-        categories
-        .value_counts()
-        .sort_index()
-    )
+    counts = categories.value_counts().sort_index()
 
     # Sequential progression from weak to deep taxonomic sharing.
     colors = [
@@ -1175,19 +1126,18 @@ def plot_knn_taxonomic_composition(
 # Plot 4
 # ---------------------------------------------------------------------------
 
+
 def plot_similarity_by_relationship(
     df: pd.DataFrame,
     output: Path,
 ) -> None:
-    valid = df.dropna(
-        subset=["cosine_similarity", "taxonomic_relationship"]
-    ).copy()
+    valid = df.dropna(subset=["cosine_similarity", "taxonomic_relationship"]).copy()
 
     # Parse only relationships whose labels explicitly encode shared depth.
     depth_rows = valid[
-        valid["taxonomic_relationship"].astype(str).str.startswith(
-            "shared_prefix_depth_"
-        )
+        valid["taxonomic_relationship"]
+        .astype(str)
+        .str.startswith("shared_prefix_depth_")
     ].copy()
 
     depth_rows["shared_depth"] = (
@@ -1277,13 +1227,12 @@ def plot_similarity_by_relationship(
 # Plot 5
 # ---------------------------------------------------------------------------
 
+
 def plot_similarity_vs_delta_gc(
     df: pd.DataFrame,
     output: Path,
 ) -> None:
-    valid = df.dropna(
-        subset=["cosine_similarity", "delta_gc"]
-    )
+    valid = df.dropna(subset=["cosine_similarity", "delta_gc"])
 
     if len(valid) > 250_000:
         valid = valid.sample(
@@ -1324,6 +1273,7 @@ def plot_similarity_vs_delta_gc(
 # ---------------------------------------------------------------------------
 # Plot 6
 # ---------------------------------------------------------------------------
+
 
 def plot_similarity_vs_delta_log_length(
     df: pd.DataFrame,
@@ -1379,6 +1329,7 @@ def plot_similarity_vs_delta_log_length(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -1432,9 +1383,7 @@ def main() -> None:
     output_dir = args.output.resolve()
 
     if not knn_path.exists():
-        raise FileNotFoundError(
-            f"KNN file does not exist: {knn_path}"
-        )
+        raise FileNotFoundError(f"KNN file does not exist: {knn_path}")
 
     output_dir.mkdir(
         parents=True,
@@ -1461,23 +1410,15 @@ def main() -> None:
     if args.threads:
         config_kwargs["threads"] = args.threads
 
-    clickhouse_config = ClickHouseConfig(
-        **config_kwargs
-    )
+    clickhouse_config = ClickHouseConfig(**config_kwargs)
 
-    clickhouse = ClickHouseResource(
-        clickhouse_config
-    )
+    clickhouse = ClickHouseResource(clickhouse_config)
 
     # ---------------------------------------------------------------
     # Temporary KNN Parquet
     # ---------------------------------------------------------------
 
-    temp_dir = Path(
-        tempfile.mkdtemp(
-            prefix="level3_knn_"
-        )
-    )
+    temp_dir = Path(tempfile.mkdtemp(prefix="level3_knn_"))
 
     temp_knn = temp_dir / "knn_neighbors.parquet"
 
@@ -1491,18 +1432,14 @@ def main() -> None:
         # Register datasets
         # -----------------------------------------------------------
 
-        LOGGER.info(
-            "Registering KNN dataset with ClickHouse"
-        )
+        LOGGER.info("Registering KNN dataset with ClickHouse")
 
         clickhouse.register_dataset(
             "knn",
             str(temp_knn),
         )
 
-        LOGGER.info(
-            "Registering CPU-enriched HF dataset with ClickHouse"
-        )
+        LOGGER.info("Registering CPU-enriched HF dataset with ClickHouse")
 
         clickhouse.register_hf_dataset(
             "cpu",
@@ -1511,22 +1448,16 @@ def main() -> None:
             pattern="*.parquet",
         )
 
-        LOGGER.info(
-            "Registered ClickHouse sources: knn, cpu"
-        )
+        LOGGER.info("Registered ClickHouse sources: knn, cpu")
 
         # -----------------------------------------------------------
         # Analysis
         # -----------------------------------------------------------
 
-        df = load_knn_metadata(
-            clickhouse
-        )
+        df = load_knn_metadata(clickhouse)
 
         if df.empty:
-            raise RuntimeError(
-                "ClickHouse returned zero KNN/metadata rows."
-            )
+            raise RuntimeError("ClickHouse returned zero KNN/metadata rows.")
 
         # -----------------------------------------------------------
         # Normalize dtypes
@@ -1650,9 +1581,7 @@ def main() -> None:
         )
 
     finally:
-        LOGGER.info(
-            "Removing temporary KNN Parquet directory"
-        )
+        LOGGER.info("Removing temporary KNN Parquet directory")
 
         shutil.rmtree(
             temp_dir,

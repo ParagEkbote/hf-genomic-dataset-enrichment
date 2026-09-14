@@ -55,6 +55,7 @@ dependencies = [
     "marimo",
     "scipy",
     "scikit-learn",
+    "httpx2",
 ]
 
 
