@@ -13,7 +13,7 @@ from typing import Any
 # ============================================================================
 # Carbon resources
 # ============================================================================
-from carbon_enrichment.resources.faceberg import (
+from carbon_enrichment.resources.facebergs import (
     PipelineCatalog,
     catalog_managed_tables,
     get_catalog,
@@ -439,6 +439,19 @@ def _get_snapshot_id(table: Any) -> str | None:
     return str(snapshot_id)
 
 
+def _make_portable_uri(location: Any) -> str | None:
+    """Force local Faceberg file:// paths into portable hf:// bucket URIs."""
+    if location is None:
+        return None
+    
+    loc_str = str(location)
+    if loc_str.startswith("file://") and "carbon-catalog" in loc_str:
+        suffix = loc_str.split("carbon-catalog/")[-1]
+        return f"hf://buckets/AINovice2005/carbon-catalog/{suffix}"
+        
+    return loc_str
+
+
 def resolve_faceberg_nodes(
     catalog: PipelineCatalog,
 ) -> tuple[ResolvedProvenanceNode, ...]:
@@ -473,10 +486,8 @@ def resolve_faceberg_nodes(
             f"    describe done ({perf_counter() - describe_started:.1f}s)", flush=True
         )
 
-        metadata_location = getattr(
-            table,
-            "metadata_location",
-            None,
+        metadata_location = _make_portable_uri(
+            getattr(table, "metadata_location", None)
         )
 
         resolved.append(
@@ -485,9 +496,7 @@ def resolve_faceberg_nodes(
                 table=table_name,
                 repository=spec["repo"],
                 config=spec["config"],
-                metadata_location=(
-                    str(metadata_location) if metadata_location is not None else None
-                ),
+                metadata_location=metadata_location,
                 snapshot_id=_get_snapshot_id(table),
                 location=description.location,
                 schema=description.schema,
@@ -524,7 +533,9 @@ def run_phase1_validation(
         started = perf_counter()
 
         table = catalog.load_table(node_id)
-        metadata_location = getattr(table, "metadata_location", None)
+        metadata_location = _make_portable_uri(
+            getattr(table, "metadata_location", None)
+        )
 
         executions.append(
             DuckDBExecution(
@@ -540,11 +551,7 @@ def run_phase1_validation(
                 result={
                     "accessible": True,
                     "validation_mode": "faceberg_metadata",
-                    "metadata_location": (
-                        str(metadata_location)
-                        if metadata_location is not None
-                        else None
-                    ),
+                    "metadata_location": metadata_location,
                 },
             )
         )
@@ -647,7 +654,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--catalog",
         type=Path,
-        default=Path("carbon-catalog"),
+        default=Path("../../carbon-catalog"),
         help=("Local Faceberg catalog path. Default: carbon-catalog"),
     )
 
