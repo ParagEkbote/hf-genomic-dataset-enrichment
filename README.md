@@ -154,3 +154,9 @@ It is used for:
 * combining vector results with structured metadata from ClickHouse
 
 The vector index is therefore complementary to the analytical representation in ClickHouse.
+
+## Documentation
+
+- [Architecture](docs/Architecture.md) — module ownership, pipeline wiring, and system boundaries.
+- [Pipeline Guide](docs/Pipeline.md) — asset execution, resources, configuration, and storage.
+- [Results and Outputs](docs/Results.md) — materialized outputs, analysis modules, metrics, and provenance.

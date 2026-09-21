@@ -23,9 +23,6 @@ carbon_gpu_enrichment
    |         |
    v         v
 carbon_embeddings   carbon_likelihood_stats
-                            |
-                            v
-                    carbon_likelihood_summary
 ```
 
 `definitions.py` is the single Dagster wiring point: it imports the assets below, groups them, defines jobs, and registers resources. It does not contain pipeline logic itself.
@@ -83,7 +80,7 @@ carbon_embeddings   carbon_likelihood_stats
 | `derived/embedding_features.py` | Loads embedding Parquet output and pushes it into LanceDB via `LanceDBResource`/`LanceDBConfig`. |
 | `derived/provenance.py` | Builds the run provenance manifest from the Faceberg catalog (`get_catalog`, `catalog_managed_tables`). |
 | `derived/script.py` | Standalone CLI entry point for taxonomy-rank analysis over `AINovice2005/carbon-pilot-corpus-dedup`, joined on `record_id, start, end`; supports the taxonomy ranks from `domain` through subordinate levels. |
-| `notebook/results.py`, `visualization/*.py` | Present but currently empty — not yet implemented. |
+| `notebook/cpu_enrichment_results.py`, `notebook/gpu_enrichment_results.py`, `notebook/taxonomy_*.py`, `visualization/*.py` | Analysis helpers and phase-specific visualization modules. |
 
 ## Shared contracts
 
