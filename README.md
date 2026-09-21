@@ -6,7 +6,7 @@ Data Enrichment pipeline for the [carbon-pretraining-corpus](https://huggingface
 
 Explore the interactive diagram and their schemas:
 
-[View the interactive pipeline diagram](docs/carbon_pipeline_with_schemas.html)
+<iframe src="docs/carbon_pipeline_with_schemas.html" width="100%" height="800" style="border: none;" allowfullscreen></iframe>
 
 
 - [`carbon-cpu-enriched-sequences`](https://huggingface.co/datasets/AINovice2005/carbon-cpu-enriched-sequences) — output of the CPU enrichment stage; adds sequence-derived features (length, GC content, coding status, strand, taxonomy) to the pretraining split. Source for stratified sampling into the GPU input corpus.
