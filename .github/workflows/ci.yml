@@ -1,0 +1,96 @@
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: carbon-enrichment
+
+jobs:
+  quality:
+    name: Code quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: carbon-enrichment/pyproject.toml
+
+      - name: Install package and development tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run pre-commit checks
+        run: pre-commit run --all-files
+
+      - name: Check Python lint
+        run: ruff check .
+
+      - name: Check Python formatting
+        run: ruff format --check .
+
+  validation:
+    name: Project validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: carbon-enrichment/pyproject.toml
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Compile Python sources
+        run: python -m compileall -q carbon_enrichment
+
+      - name: Validate YAML configuration
+        run: python -m carbon_enrichment.validation.config
+
+      - name: Load Dagster definitions
+        run: python -c "import carbon_enrichment.definitions"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: carbon-enrichment/pyproject.toml
+
+      - name: Install package and development tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
