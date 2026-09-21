@@ -6,7 +6,14 @@ Data Enrichment pipeline for the [carbon-pretraining-corpus](https://huggingface
 
 Explore the interactive diagram and their schemas:
 
-<iframe src="docs/carbon_pipeline_with_schemas.html" width="100%" height="800" style="border: none;" allowfullscreen></iframe>
+[View the Interactive Pipeline Diagram](https://htmlpreview.github.io/?https://github.com/ParagEkbote/hf-genomic-dataset-enrichment/blob/main/docs/carbon_pipeline_with_schemas.html)
+
+<object
+  data="docs/carbon_pipeline_with_schemas.html"
+  type="text/html"
+  width="100%"
+  height="800">
+</object>
 
 
 - [`carbon-cpu-enriched-sequences`](https://huggingface.co/datasets/AINovice2005/carbon-cpu-enriched-sequences) — output of the CPU enrichment stage; adds sequence-derived features (length, GC content, coding status, strand, taxonomy) to the pretraining split. Source for stratified sampling into the GPU input corpus.
