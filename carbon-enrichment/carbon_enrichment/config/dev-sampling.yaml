@@ -1,0 +1,12 @@
+ops:
+  carbon_pilot_corpus:
+    config:
+      validation_level: dev
+      cpu_enriched_input_type: local
+      output_dir: ".dagster_hf_storage/carbon_cpu_enriched_sequences"
+      pilot_output_dir: ".dagster_hf_storage/carbon_pilot_corpus"
+      pilot_sample_fraction: 1.0
+      pilot_sample_seed: 42
+      batch_size: 2048
+      rows_per_shard: 10000
+      compression: "zstd"
