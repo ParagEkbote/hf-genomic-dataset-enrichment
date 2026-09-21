@@ -43,6 +43,21 @@ Data Enrichment pipeline for the [carbon-pretraining-corpus](https://huggingface
 
 CPU sampling controls representativeness of the population entering GPU enrichment. GPU token budgeting controls compute cost of the model pass itself.
 
+## Start Here
+
+| Need | Documentation |
+|---|---|
+| Understand module ownership and system boundaries | [Architecture](docs/Architecture.md) |
+| Follow asset execution, resources, and configuration | [Pipeline Guide](docs/Pipeline.md) |
+| Find materialized outputs, metrics, and provenance | [Results and Outputs](docs/Results.md) |
+
+### Core References
+
+- [Dagster definitions](carbon-enrichment/carbon_enrichment/definitions.py) — asset graph, jobs, and registered resources.
+- [Runtime configuration](carbon-enrichment/carbon_enrichment/config.py) — shared `CarbonPipelineConfig` fields and defaults.
+- [Data contracts](carbon-enrichment/carbon_enrichment/schema.py) — source schema, join keys, and derived output columns.
+- [Development run configurations](carbon-enrichment/carbon_enrichment/config/) — CPU, sampling, tokenization, and GPU YAML files.
+
 ## Overview
 
 ```text

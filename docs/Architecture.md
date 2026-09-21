@@ -2,7 +2,9 @@
 
 Module and resource ownership for `carbon-enrichment`. This is a map of where things live in the code, not a run guide.
 
-## Pipeline wiring (`definitions.py`)
+**Related documentation:** [Pipeline Guide](Pipeline.md) · [Results and Outputs](Results.md) · [README](../README.md)
+
+## Pipeline wiring ([`definitions.py`](../carbon-enrichment/carbon_enrichment/definitions.py))
 
 ```
 Hugging Face Hub
@@ -84,8 +86,8 @@ carbon_embeddings   carbon_likelihood_stats
 
 ## Shared contracts
 
-- **`schema.py`** — the data-contract module, deliberately independent of Dagster. Defines HF dataset identifiers, validation tiers, the expected raw schema, allowed categorical/token values, valid gene-boundary pairs, the IUPAC nucleotide alphabet, taxonomy/coordinate expectations, and GPU output contracts (embedding/likelihood columns, token-mask semantics). Explicitly lossless — must not impose stricter constraints than the raw dataset actually guarantees.
-- **`config.py`** — runtime configuration only (`CarbonPipelineConfig`, a single `dagster.Config` object covering the full pipeline, deliberately not split per-asset). Data contracts live in `schema.py`; Dagster wiring lives in `definitions.py` — this module is neither.
+- **[`schema.py`](../carbon-enrichment/carbon_enrichment/schema.py)** — the data-contract module, deliberately independent of Dagster. Defines HF dataset identifiers, validation tiers, the expected raw schema, allowed categorical/token values, valid gene-boundary pairs, the IUPAC nucleotide alphabet, taxonomy/coordinate expectations, and GPU output contracts (embedding/likelihood columns, token-mask semantics). Explicitly lossless — must not impose stricter constraints than the raw dataset actually guarantees.
+- **[`config.py`](../carbon-enrichment/carbon_enrichment/config.py)** — runtime configuration only (`CarbonPipelineConfig`, a single `dagster.Config` object covering the full pipeline, deliberately not split per-asset). Data contracts live in `schema.py`; Dagster wiring lives in `definitions.py` — this module is neither.
 
 ## Catalog metadata (`carbon-catalog/`)
 

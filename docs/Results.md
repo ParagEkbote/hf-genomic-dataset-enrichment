@@ -2,6 +2,8 @@
 
 This page describes the outputs produced by the enrichment pipeline and the analysis code that consumes them. Pipeline execution is documented in [Pipeline.md](Pipeline.md).
 
+**Related documentation:** [Architecture](Architecture.md) · [Pipeline Guide](Pipeline.md) · [README](../README.md)
+
 ## Materialized Pipeline Outputs
 
 | Output | Producer | Contents | Default location |
@@ -51,20 +53,20 @@ The analysis code lives under `carbon_enrichment/results/`.
 
 | Module | Responsibility |
 |---|---|
-| `derived/distributions.py` | Computes distributional summaries over sequence and enrichment data |
-| `derived/likelihood_distributions.py` | Joins likelihood statistics to sequence-derived features and analyzes likelihood distributions |
-| `derived/embedding_features.py` | Loads embedding outputs into LanceDB for vector analysis |
-| `derived/case_study.py` | Produces the Phase 4.5 anomaly and information-gain analysis |
-| `derived/provenance.py` | Builds provenance information from the Faceberg catalog |
-| `derived/script.py` | Runs taxonomy-rank analysis over the shared cohort |
+| [`derived/distributions.py`](../carbon-enrichment/carbon_enrichment/results/derived/distributions.py) | Computes distributional summaries over sequence and enrichment data |
+| [`derived/likelihood_distributions.py`](../carbon-enrichment/carbon_enrichment/results/derived/likelihood_distributions.py) | Joins likelihood statistics to sequence-derived features and analyzes likelihood distributions |
+| [`derived/embedding_features.py`](../carbon-enrichment/carbon_enrichment/results/derived/embedding_features.py) | Loads embedding outputs into LanceDB for vector analysis |
+| [`derived/case_study.py`](../carbon-enrichment/carbon_enrichment/results/derived/case_study.py) | Produces the Phase 4.5 anomaly and information-gain analysis |
+| [`derived/provenance.py`](../carbon-enrichment/carbon_enrichment/results/derived/provenance.py) | Builds provenance information from the Faceberg catalog |
+| [`notebook/taxonomy_index.py`](../carbon-enrichment/carbon_enrichment/results/notebook/taxonomy_index.py) | Supports taxonomy-rank indexing and analysis over the shared cohort |
 
 These modules are analytical consumers of materialized datasets. They are not Dagster assets in the current definitions.
 
 ### Notebook and Visualization Helpers
 
-The `results/notebook/` directory contains reusable analysis helpers for CPU and GPU enrichment results, taxonomy indexing, and taxonomy lookups.
+The [`results/notebook/`](../carbon-enrichment/carbon_enrichment/results/notebook/) directory contains reusable analysis helpers for CPU and GPU enrichment results, taxonomy indexing, and taxonomy lookups.
 
-The `results/visualization/` directory contains phase-specific plotting modules:
+The [`results/visualization/`](../carbon-enrichment/carbon_enrichment/results/visualization/) directory contains phase-specific plotting modules:
 
 - `phase2.py` for CPU feature and quality validation;
 - `phase3.py`, `phase3_1.py`, and `phase3_2.py` for distribution analysis;
@@ -75,21 +77,21 @@ These modules should be treated as analysis tooling rather than pipeline stages.
 
 ## Metrics Directory
 
-Generated and checked-in analytical outputs live under `metrics/derived/`.
+Generated and checked-in analytical outputs live under [`metrics/derived/`](../metrics/derived/).
 
 | Directory | Purpose | Representative outputs |
 |---|---|---|
-| `common_cohort/` | Defines and analyzes the shared cohort used across data products | Taxonomy and sample-size summaries |
-| `phase2_csv/` | Validates CPU-enriched biological and sequence features | GC content, sequence length, taxonomy composition, stop-codon checks |
-| `phase3/distributions/` | Summarizes sequence and likelihood distributions | Cohort summaries, length deciles, conditional distributions, fitted models |
-| `phase4/` | Evaluates embedding retrieval | KNN neighbors and LanceDB metrics |
-| `phase4/level3/` | Examines biological and taxonomic relationships in nearest neighbors | Taxonomic consistency, shared taxonomy depth, biological correlations |
+| [`common_cohort/`](../metrics/derived/common_cohort/) | Defines and analyzes the shared cohort used across data products | Taxonomy and sample-size summaries |
+| [`phase2_csv/`](../metrics/derived/phase2_csv/) | Validates CPU-enriched biological and sequence features | GC content, sequence length, taxonomy composition, stop-codon checks |
+| [`phase3/distributions/`](../metrics/derived/phase3/distributions/) | Summarizes sequence and likelihood distributions | Cohort summaries, length deciles, conditional distributions, fitted models |
+| [`phase4/`](../metrics/derived/phase4/) | Evaluates embedding retrieval | KNN neighbors and LanceDB metrics |
+| [`phase4/level3/`](../metrics/derived/phase4/level3/) | Examines biological and taxonomic relationships in nearest neighbors | Taxonomic consistency, shared taxonomy depth, biological correlations |
 
 Metrics are derived artifacts, not raw pipeline inputs. Their generating analysis parameters should be recorded with the output when reproducibility matters.
 
 ## Catalog and Provenance
 
-Catalog metadata is stored under `carbon_enrichment/carbon-catalog/` and is consumed by the Faceberg resource. It describes table structure, lineage, and provenance for catalog-managed outputs including CPU-enriched, sampled, tokenized, embedding, and likelihood datasets.
+Catalog metadata is stored under [`carbon-catalog/`](../carbon-enrichment/carbon_enrichment/carbon-catalog/) and is consumed by the [`Faceberg resource`](../carbon-enrichment/carbon_enrichment/resources/faceberg.py). It describes table structure, lineage, and provenance for catalog-managed outputs including CPU-enriched, sampled, tokenized, embedding, and likelihood datasets.
 
 The intended lineage is:
 
@@ -110,7 +112,7 @@ tokenized
 embeddings  likelihood_stats
 ```
 
-`results/derived/provenance.py` can use this catalog metadata to build a run-level provenance manifest. The raw streaming source remains an external Hugging Face input rather than a copied catalog table.
+[`results/derived/provenance.py`](../carbon-enrichment/carbon_enrichment/results/derived/provenance.py) can use this catalog metadata to build a run-level provenance manifest. The raw streaming source remains an external Hugging Face input rather than a copied catalog table.
 
 ## Interpretation and Reproduction
 
@@ -127,4 +129,4 @@ CPU and GPU outputs should not be joined by row order. Use the composite biologi
 
 ## Current Scope
 
-The results modules and visualization scripts are analytical tooling and are still evolving. The materialized asset contracts in `carbon_enrichment/schema.py` are the stable reference for tokenized, embedding, and likelihood column names.
+The results modules and visualization scripts are analytical tooling and are still evolving. The materialized asset contracts in [`schema.py`](../carbon-enrichment/carbon_enrichment/schema.py) are the stable reference for tokenized, embedding, and likelihood column names.

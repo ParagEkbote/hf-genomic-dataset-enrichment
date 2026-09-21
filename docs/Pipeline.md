@@ -2,6 +2,8 @@
 
 This page describes how the Carbon enrichment pipeline executes. The higher-level module ownership map is in [Architecture.md](Architecture.md).
 
+**Related documentation:** [Architecture](Architecture.md) · [Results and Outputs](Results.md) · [README](../README.md)
+
 ## Data Flow
 
 ```text
@@ -47,7 +49,7 @@ All jobs use Dagster's in-process executor. The CPU and tokenization assets mana
 
 ### CPU Enrichment
 
-`carbon_cpu_enriched_sequences` reads the Carbon dataset as a streaming Hugging Face `IterableDataset`. It processes bounded Arrow record batches and writes Parquet shards.
+[`carbon_cpu_enriched_sequences`](../carbon-enrichment/carbon_enrichment/assets/cpu/streaming.py) reads the Carbon dataset as a streaming Hugging Face `IterableDataset`. It processes bounded Arrow record batches and writes Parquet shards.
 
 The CPU stage performs these operations in order:
 
@@ -61,7 +63,7 @@ The complete source corpus is not materialized as a Dataset, DataFrame, or unbou
 
 ### Pilot Sampling
 
-`carbon_pilot_corpus` reads the CPU-enriched corpus and writes a deterministic pilot subset. Each row receives an inclusion decision based on a SHA-256 hash of its seed and `record_id`.
+[`carbon_pilot_corpus`](../carbon-enrichment/carbon_enrichment/assets/gpu/sampling.py) reads the CPU-enriched corpus and writes a deterministic pilot subset. Each row receives an inclusion decision based on a SHA-256 hash of its seed and `record_id`.
 
 Sampling is stratified using:
 
@@ -74,7 +76,7 @@ The sampler records the bounded input population and sampled population by strat
 
 ### Tokenization
 
-`carbon_tokenized_corpus` converts the pilot corpus into Carbon model inputs.
+[`carbon_tokenized_corpus`](../carbon-enrichment/carbon_enrichment/assets/gpu/tokenize_and_tag.py) converts the pilot corpus into Carbon model inputs.
 
 The stage:
 
@@ -89,7 +91,7 @@ A probe sequence is checked before real work begins to ensure the tokenizer is a
 
 ### GPU Enrichment
 
-`carbon_gpu_enrichment` consumes the tokenized corpus and performs one Carbon model forward pass per batch. It writes two materialized assets:
+[`carbon_gpu_enrichment`](../carbon-enrichment/carbon_enrichment/assets/gpu/embeddings.py) consumes the tokenized corpus and performs one Carbon model forward pass per batch. It writes two materialized assets:
 
 - `carbon_embeddings`: pooled hidden-state embeddings and embedding norms;
 - `carbon_likelihood_stats`: log-probability, perplexity, and related token-level statistics.
@@ -100,25 +102,25 @@ The asset uses token-length buckets, bounded GPU token budgets, bfloat16 inferen
 
 | Resource | Module | Responsibility |
 |---|---|---|
-| `hf_resource` | `resources/hf_client.py` | Loads the source Hugging Face dataset through `dagster-hf-datasets` |
-| `carbon` | `resources/carbon.py` | Lazily loads the pinned Carbon model and hybrid tokenizer |
-| `LanceDBResource` | `resources/lancedb.py` | Stores and searches embedding vectors |
-| `ClickHouseResource` | `resources/clickhouse.py` | Runs analytical queries at scale |
-| DuckDB helpers | `resources/duckdb.py` | Supports local Arrow/Parquet analysis and sampling checks |
-| Faceberg helpers | `resources/faceberg.py` | Reads catalog-managed tables and lineage metadata |
+| `hf_resource` | [`resources/hf_client.py`](../carbon-enrichment/carbon_enrichment/resources/hf_client.py) | Loads the source Hugging Face dataset through `dagster-hf-datasets` |
+| `carbon` | [`resources/carbon.py`](../carbon-enrichment/carbon_enrichment/resources/carbon.py) | Lazily loads the pinned Carbon model and hybrid tokenizer |
+| `LanceDBResource` | [`resources/lancedb.py`](../carbon-enrichment/carbon_enrichment/resources/lancedb.py) | Stores and searches embedding vectors |
+| `ClickHouseResource` | [`resources/clickhouse.py`](../carbon-enrichment/carbon_enrichment/resources/clickhouse.py) | Runs analytical queries at scale |
+| DuckDB helpers | [`resources/duckdb.py`](../carbon-enrichment/carbon_enrichment/resources/duckdb.py) | Supports local Arrow/Parquet analysis and sampling checks |
+| Faceberg helpers | [`resources/faceberg.py`](../carbon-enrichment/carbon_enrichment/resources/faceberg.py) | Reads catalog-managed tables and lineage metadata |
 
 The Carbon model resource is lazy: importing definitions or loading configuration does not load the 3B-parameter model. Model and tokenizer revisions are exposed for provenance metadata.
 
 ## Configuration
 
-Runtime configuration is defined by `CarbonPipelineConfig` in `carbon_enrichment/config.py`. Development run configurations live in `carbon_enrichment/config/`:
+Runtime configuration is defined by [`CarbonPipelineConfig`](../carbon-enrichment/carbon_enrichment/config.py). Development run configurations live in [`carbon_enrichment/config/`](../carbon-enrichment/carbon_enrichment/config/):
 
 | File | Asset | Main purpose |
 |---|---|---|
-| `dev-cpu.yaml` | `carbon_cpu_enriched_sequences` | CPU validation level, streaming, batch and shard settings |
-| `dev-sampling.yaml` | `carbon_pilot_corpus` | Sampling fraction, seed, input, and pilot output settings |
-| `dev-tokenize.yaml` | `carbon_tokenized_corpus` | Pilot input, tokenized output, shard, and worker settings |
-| `dev-gpu.yaml` | `carbon_gpu_enrichment` | Tokenized input, GPU outputs, batch, and token budget settings |
+| [`dev-cpu.yaml`](../carbon-enrichment/carbon_enrichment/config/dev-cpu.yaml) | `carbon_cpu_enriched_sequences` | CPU validation level, streaming, batch and shard settings |
+| [`dev-sampling.yaml`](../carbon-enrichment/carbon_enrichment/config/dev-sampling.yaml) | `carbon_pilot_corpus` | Sampling fraction, seed, input, and pilot output settings |
+| [`dev-tokenize.yaml`](../carbon-enrichment/carbon_enrichment/config/dev-tokenize.yaml) | `carbon_tokenized_corpus` | Pilot input, tokenized output, shard, and worker settings |
+| [`dev-gpu.yaml`](../carbon-enrichment/carbon_enrichment/config/dev-gpu.yaml) | `carbon_gpu_enrichment` | Tokenized input, GPU outputs, batch, and token budget settings |
 
 The sampling and tokenization configurations must use the same `pilot_output_dir`.
 
