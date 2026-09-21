@@ -443,12 +443,12 @@ def _make_portable_uri(location: Any) -> str | None:
     """Force local Faceberg file:// paths into portable hf:// bucket URIs."""
     if location is None:
         return None
-    
+
     loc_str = str(location)
     if loc_str.startswith("file://") and "carbon-catalog" in loc_str:
         suffix = loc_str.split("carbon-catalog/")[-1]
         return f"hf://buckets/AINovice2005/carbon-catalog/{suffix}"
-        
+
     return loc_str
 
 

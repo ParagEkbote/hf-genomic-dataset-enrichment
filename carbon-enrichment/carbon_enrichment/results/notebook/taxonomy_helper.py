@@ -8,7 +8,6 @@ from urllib.parse import quote
 
 import httpx2
 
-
 NCBI_BASE_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2"
 
 DEFAULT_TIMEOUT = httpx2.Timeout(
@@ -181,7 +180,7 @@ class NCBIClient:
             follow_redirects=True,
         )
 
-    def __enter__(self) -> "NCBIClient":
+    def __enter__(self) -> NCBIClient:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -233,9 +232,7 @@ class NCBIClient:
             return response
 
         # Unreachable in practice, but keeps type-checkers satisfied.
-        raise NCBIRequestError(
-            f"NCBI request failed for {path}: {last_exc}"
-        )
+        raise NCBIRequestError(f"NCBI request failed for {path}: {last_exc}")
 
     def _get(self, path: str) -> dict[str, Any]:
         """Perform a GET request and return a JSON object."""
@@ -243,9 +240,7 @@ class NCBIClient:
         response = self._request_with_retry(path)
 
         if response.status_code == 404:
-            raise NCBINotFoundError(
-                f"NCBI resource not found: {path}"
-            )
+            raise NCBINotFoundError(f"NCBI resource not found: {path}")
 
         try:
             response.raise_for_status()
@@ -260,14 +255,11 @@ class NCBIClient:
             data = response.json()
 
         except ValueError as exc:
-            raise NCBIResponseError(
-                f"NCBI returned invalid JSON for {path}"
-            ) from exc
+            raise NCBIResponseError(f"NCBI returned invalid JSON for {path}") from exc
 
         if not isinstance(data, dict):
             raise NCBIResponseError(
-                f"Unexpected NCBI response type for {path}: "
-                f"{type(data).__name__}"
+                f"Unexpected NCBI response type for {path}: {type(data).__name__}"
             )
 
         return data
@@ -278,9 +270,7 @@ class NCBIClient:
         response = self._request_with_retry(path)
 
         if response.status_code == 404:
-            raise NCBINotFoundError(
-                f"NCBI resource not found: {path}"
-            )
+            raise NCBINotFoundError(f"NCBI resource not found: {path}")
 
         try:
             response.raise_for_status()
@@ -310,10 +300,7 @@ class NCBIClient:
             GCF_958450345.1
         """
 
-        path = (
-            f"/genome/sequence_accession/"
-            f"{accession}/sequence_assemblies"
-        )
+        path = f"/genome/sequence_accession/{accession}/sequence_assemblies"
 
         data = self._get(path)
 
@@ -321,18 +308,14 @@ class NCBIClient:
 
         if not isinstance(accessions, list):
             raise NCBIResponseError(
-                "Unexpected sequence-resolution response: "
-                "'accessions' is not a list."
+                "Unexpected sequence-resolution response: 'accessions' is not a list."
             )
 
         assembly_accessions = tuple(
             value
             for value in accessions
             if isinstance(value, str)
-            and (
-                value.startswith("GCA_")
-                or value.startswith("GCF_")
-            )
+            and (value.startswith("GCA_") or value.startswith("GCF_"))
         )
 
         return SequenceResolution(
@@ -359,8 +342,7 @@ class NCBIClient:
 
         if not isinstance(reports, list):
             raise NCBIResponseError(
-                "Unexpected assembly response: "
-                "'reports' is not a list."
+                "Unexpected assembly response: 'reports' is not a list."
             )
 
         return data
@@ -376,16 +358,12 @@ class NCBIClient:
         reports = data["reports"]
 
         if not reports:
-            raise NCBINotFoundError(
-                f"No assembly report returned for {accession}"
-            )
+            raise NCBINotFoundError(f"No assembly report returned for {accession}")
 
         report = reports[0]
 
         if not isinstance(report, dict):
-            raise NCBIResponseError(
-                "Unexpected assembly report entry."
-            )
+            raise NCBIResponseError("Unexpected assembly report entry.")
 
         organism = report.get("organism") or {}
         assembly_info = report.get("assembly_info") or {}
@@ -430,8 +408,7 @@ class NCBIClient:
 
         if not isinstance(reports, list):
             raise NCBIResponseError(
-                "Unexpected taxonomy response: "
-                "'reports' is not a list."
+                "Unexpected taxonomy response: 'reports' is not a list."
             )
 
         return data
@@ -458,16 +435,12 @@ class NCBIClient:
         reports = data["reports"]
 
         if not reports:
-            raise NCBINotFoundError(
-                f"No taxonomy report returned for {taxon}"
-            )
+            raise NCBINotFoundError(f"No taxonomy report returned for {taxon}")
 
         report = reports[0]
 
         if not isinstance(report, dict):
-            raise NCBIResponseError(
-                "Unexpected taxonomy report entry."
-            )
+            raise NCBIResponseError("Unexpected taxonomy report entry.")
 
         taxonomy = report.get("taxonomy")
 
@@ -485,17 +458,14 @@ class NCBIClient:
 
         if not isinstance(tax_id, int):
             raise NCBIResponseError(
-                "Unexpected taxonomy response: "
-                "'taxonomy.tax_id' is missing or invalid."
+                "Unexpected taxonomy response: 'taxonomy.tax_id' is missing or invalid."
             )
 
         # ---------------------------------------------------------------------
         # Scientific name
         # ---------------------------------------------------------------------
 
-        scientific_name_data = taxonomy.get(
-            "current_scientific_name"
-        )
+        scientific_name_data = taxonomy.get("current_scientific_name")
 
         if not isinstance(scientific_name_data, dict):
             raise NCBIResponseError(
@@ -537,8 +507,7 @@ class NCBIClient:
 
         if not isinstance(classification_raw, dict):
             raise NCBIResponseError(
-                "Unexpected taxonomy response: "
-                "'classification' is not an object."
+                "Unexpected taxonomy response: 'classification' is not an object."
             )
 
         classification: dict[str, int | str] = {}
@@ -640,8 +609,7 @@ class NCBIClient:
             tax_id = int(tax_id_raw)
         except (TypeError, ValueError) as exc:
             raise NCBIResponseError(
-                "Unexpected image metadata response: "
-                "'tax_id' is missing or invalid."
+                "Unexpected image metadata response: 'tax_id' is missing or invalid."
             ) from exc
 
         image_sizes_raw = data.get("image_sizes", [])
@@ -650,9 +618,7 @@ class NCBIClient:
             image_sizes_raw = []
 
         image_sizes = tuple(
-            value
-            for value in image_sizes_raw
-            if isinstance(value, str)
+            value for value in image_sizes_raw if isinstance(value, str)
         )
 
         return TaxonImageMetadata(
@@ -746,14 +712,12 @@ class NCBIClient:
 
         except NCBIError as exc:
             raise NCBIRequestError(
-                f"Failed resolving sequence accession for record "
-                f"{record_id}: {exc}"
+                f"Failed resolving sequence accession for record {record_id}: {exc}"
             ) from exc
 
         if not sequence.assembly_accessions:
             raise NCBINotFoundError(
-                f"No assembly accession found for sequence "
-                f"accession {record_id}"
+                f"No assembly accession found for sequence accession {record_id}"
             )
 
         # Current policy: use the first NCBI-resolved assembly when

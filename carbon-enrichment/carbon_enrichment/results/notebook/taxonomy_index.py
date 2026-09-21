@@ -38,7 +38,6 @@ import logging
 from pathlib import Path
 
 import pandas as pd
-
 from ncbi_client import NCBIClient, NCBIError
 
 logger = logging.getLogger(__name__)
@@ -142,8 +141,10 @@ def build_taxonomy_index(
     )
 
     if not todo:
-        return existing_df if existing_df is not None else pd.DataFrame(
-            columns=BASE_COLUMNS
+        return (
+            existing_df
+            if existing_df is not None
+            else pd.DataFrame(columns=BASE_COLUMNS)
         )
 
     rows: list[dict] = []
@@ -211,9 +212,7 @@ def cohort_for_rank(
     value = match.iloc[0][rank]
 
     if pd.isna(value):
-        raise ValueError(
-            f"record_id {record_id!r} has no value for rank '{rank}'."
-        )
+        raise ValueError(f"record_id {record_id!r} has no value for rank '{rank}'.")
 
     return index_df.loc[index_df[rank] == value]
 
