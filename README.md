@@ -8,13 +8,6 @@ Explore the interactive diagram and their schemas:
 
 [View the Interactive Pipeline Diagram](https://htmlpreview.github.io/?https://github.com/ParagEkbote/hf-genomic-dataset-enrichment/blob/main/docs/carbon_pipeline_with_schemas.html)
 
-<object
-  data="docs/carbon_pipeline_with_schemas.html"
-  type="text/html"
-  width="100%"
-  height="800">
-</object>
-
 
 - [`carbon-cpu-enriched-sequences`](https://huggingface.co/datasets/AINovice2005/carbon-cpu-enriched-sequences) — output of the CPU enrichment stage; adds sequence-derived features (length, GC content, coding status, strand, taxonomy) to the pretraining split. Source for stratified sampling into the GPU input corpus.
 - [`carbon-cpu-enriched-sequences-sampled`](https://huggingface.co/datasets/AINovice2005/carbon-cpu-enriched-sequences-sampled) — A deduplicated sample upstream of `carbon-cpu-enriched-sequences` (3.22M records). Each row is a gene/sequence record with boundary/framing tokens, biological annotation (gene type, strand, taxonomy lineage, topology), raw and strand-normalized sequence, and derived features (GC content, GC skew, Shannon entropy, k-mer frequency vector, coding-region flag, QC flag).
