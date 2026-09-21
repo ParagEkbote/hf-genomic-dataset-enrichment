@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Carbon Pipeline: End to End Flow</title>
+<style>
+:root {
+  --bg: #ffffff;
+  --card: #ffffff;
+  --ink: #1a1a1a;
+  --sub: #6b6b6b;
+  --line: #d8d8d8;
+  --arrow-color: #b3b3b3;
+
+  --coral-bg: #FAECE7;   --coral-bd: #D85A30;   --coral-tx: #712B13;
+  --amber-bg: #FAEEDA;   --amber-bd: #BA7517;   --amber-tx: #633806;
+  --blue-bg: #E6F1FB;    --blue-bd: #378ADD;    --blue-tx: #0C447C;
+  --teal-bg: #E1F5EE;    --teal-bd: #1D9E75;    --teal-tx: #085041;
+  --purple-bg: #EEEDFE;  --purple-bd: #7F77DD;  --purple-tx: #3C3489;
+  --green-bg: #EAF3DE;   --green-bd: #639922;   --green-tx: #27500A;
+  --pink-bg: #FBEAF0;    --pink-bd: #D4537E;    --pink-tx: #72243E;
+  --gray-bg: #F1EFE8;    --gray-bd: #888780;    --gray-tx: #444441;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1c1a;
+    --card: #26261f;
+    --ink: #eeeee6;
+    --sub: #a3a299;
+    --line: #3c3c36;
+    --arrow-color: #55554f;
+
+    --coral-bg: #4A1B0C;   --coral-bd: #F0997B;   --coral-tx: #F5C4B3;
+    --amber-bg: #412402;   --amber-bd: #EF9F27;   --amber-tx: #FAC775;
+    --blue-bg: #042C53;    --blue-bd: #85B7EB;    --blue-tx: #B5D4F4;
+    --teal-bg: #04342C;    --teal-bd: #5DCAA5;    --teal-tx: #9FE1CB;
+    --purple-bg: #26215C;  --purple-bd: #AFA9EC;  --purple-tx: #CECBF6;
+    --green-bg: #173404;   --green-bd: #97C459;   --green-tx: #C0DD97;
+    --pink-bg: #4B1528;    --pink-bd: #ED93B1;    --pink-tx: #F4C0D1;
+    --gray-bg: #2C2C2A;    --gray-bd: #B4B2A9;    --gray-tx: #D3D1C7;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #1c1c1a;
+  --card: #26261f;
+  --ink: #eeeee6;
+  --sub: #a3a299;
+  --line: #3c3c36;
+  --arrow-color: #55554f;
+
+  --coral-bg: #4A1B0C;   --coral-bd: #F0997B;   --coral-tx: #F5C4B3;
+  --amber-bg: #412402;   --amber-bd: #EF9F27;   --amber-tx: #FAC775;
+  --blue-bg: #042C53;    --blue-bd: #85B7EB;    --blue-tx: #B5D4F4;
+  --teal-bg: #04342C;    --teal-bd: #5DCAA5;    --teal-tx: #9FE1CB;
+  --purple-bg: #26215C;  --purple-bd: #AFA9EC;  --purple-tx: #CECBF6;
+  --green-bg: #173404;   --green-bd: #97C459;   --green-tx: #C0DD97;
+  --pink-bg: #4B1528;    --pink-bd: #ED93B1;    --pink-tx: #F4C0D1;
+  --gray-bg: #2C2C2A;    --gray-bd: #B4B2A9;    --gray-tx: #D3D1C7;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 36px 20px 52px;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+h1 {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 6px;
+  letter-spacing: -0.01em;
+}
+
+.subtitle {
+  font-size: 13.5px;
+  color: var(--sub);
+  margin-bottom: 12px;
+}
+
+.hint {
+  font-size: 12.5px;
+  color: var(--sub);
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.flow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.node {
+  border-radius: 12px;
+  border: 1.5px solid var(--bd);
+  background: var(--fill);
+  padding: 13px 20px;
+  cursor: pointer;
+  transition: transform 0.14s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.14s ease;
+  text-align: center;
+  width: 100%;
+  user-select: none;
+}
+
+.node:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+.node.active {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 2px var(--ink), 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.node .t {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--tx);
+  letter-spacing: 0.01em;
+}
+
+.node .s {
+  font-size: 12px;
+  color: var(--tx);
+  opacity: 0.85;
+  margin-top: 3px;
+  font-weight: 400;
+}
+
+.arrow-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 3px 0;
+  width: 100%;
+}
+
+.arrow {
+  width: 1.5px;
+  height: 24px;
+  background: var(--arrow-color);
+  position: relative;
+}
+
+.arrow::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -1px;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 4.5px solid transparent;
+  border-right: 4.5px solid transparent;
+  border-top: 6px solid var(--arrow-color);
+}
+
+.arrow-lbl {
+  font-size: 11px;
+  color: var(--sub);
+  text-align: center;
+  line-height: 1.35;
+  margin: 5px 0;
+  max-width: 580px;
+  padding: 0 8px;
+}
+
+/* Fork connector to side-by-side branch */
+.fork-connector {
+  width: 100%;
+  max-width: 580px;
+  height: 34px;
+  display: flex;
+  justify-content: center;
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+
+.fork-connector svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.row-split {
+  display: flex;
+  gap: 16px;
+  width: 100%;
+  justify-content: center;
+}
+
+.row-split .node {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 14px 16px;
+}
+
+.schema-wrap {
+  margin-top: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-height: 520px;
+  overflow-y: auto;
+}
+.schema-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  table-layout: fixed;
+}
+.schema-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--gray-bg);
+  color: var(--gray-tx);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.schema-table th, .schema-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.schema-table th:nth-child(1), .schema-table td:nth-child(1) { width: 25%; }
+.schema-table th:nth-child(2), .schema-table td:nth-child(2) { width: 12%; }
+.schema-table th:nth-child(3), .schema-table td:nth-child(3) { width: 63%; }
+.schema-table tr:last-child td { border-bottom: 0; }
+.schema-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--bg) 65%, var(--card)); }
+.schema-table code { white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .schema-table { min-width: 560px; }
+  .schema-wrap { max-height: 440px; }
+}
+
+.detail {
+  margin-top: 30px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 16px 20px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  min-height: 84px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.detail .k {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--sub);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.detail .badge {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-weight: 600;
+  background: var(--gray-bg);
+  color: var(--gray-tx);
+  border: 1px solid var(--gray-bd);
+  text-transform: none;
+}
+
+.detail code {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  padding: 1.5px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--amber-tx);
+  display: inline-block;
+  margin-bottom: 3px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  justify-content: center;
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--sub);
+}
+
+.legend i {
+  width: 11px;
+  height: 11px;
+  border-radius: 3.5px;
+  display: inline-block;
+  border: 1.5px solid var(--bd2);
+  background: var(--bg2);
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>End to end — raw corpus &rarr; CPU enrichment &rarr; stratified sampling &rarr; GPU enrichment</h1>
+    <p class="hint">Click any block for details</p>
+  </header>
+
+  <div class="flow">
+    <!-- 1. PRETRAINING CORPUS -->
+    <div class="node" style="--fill:var(--coral-bg); --bd:var(--coral-bd); --tx:var(--coral-tx);" data-key="pretraining_corpus">
+      <div class="t">PRETRAINING CORPUS</div>
+      <div class="s">HuggingFaceBio/carbon-pretraining-corpus</div>
+    </div>
+
+    <!-- Arrow 1 -> 2 -->
+    <div class="arrow-container">
+      <div class="arrow"></div>
+    </div>
+
+    <!-- 2. Pretraining split (75%) -->
+    <div class="node" style="--fill:var(--amber-bg); --bd:var(--amber-bd); --tx:var(--amber-tx);" data-key="pretraining_split">
+      <div class="t">Pretraining split (75%)</div>
+      <div class="s">config eukaryote_generator, split train</div>
+    </div>
+
+    <!-- Arrow 2 -> 3 with label -->
+    <div class="arrow-container">
+      <div class="arrow-lbl">CPU enrichment — streaming ingestion, ProcessPoolExecutor, vectorized kernels</div>
+      <div class="arrow"></div>
+    </div>
+
+    <!-- 3. carbon-cpu-enriched-sequences -->
+    <div class="node" style="--fill:var(--blue-bg); --bd:var(--blue-bd); --tx:var(--blue-tx);" data-key="cpu_enriched">
+      <div class="t">carbon-cpu-enriched-sequences</div>
+      <div class="s">~32.4M records</div>
+    </div>
+
+    <!-- Arrow 3 -> 4 with 2-line label -->
+    <div class="arrow-container">
+      <div class="arrow-lbl">
+        stratified corpus sampling — deterministic per-row SHA-256 hash<br>
+        strata: length bucket, coding status, strand, taxonomy domain
+      </div>
+      <div class="arrow"></div>
+    </div>
+
+    <!-- 4. Sampled CPU population -->
+    <div class="node" style="--fill:var(--amber-bg); --bd:var(--amber-bd); --tx:var(--amber-tx);" data-key="sampled_population">
+      <div class="t">Sampled CPU population</div>
+      <div class="s">GPU input corpus (carbon-pilot-corpus)</div>
+    </div>
+
+    <!-- Arrow 4 -> 5 with label -->
+    <div class="arrow-container">
+      <div class="arrow-lbl">token-budgeted GPU processing — tokenization, bucketed inference, OOM retry cascade</div>
+      <div class="arrow"></div>
+    </div>
+
+    <!-- 5. GPU-enriched sequences -->
+    <div class="node" style="--fill:var(--green-bg); --bd:var(--green-bd); --tx:var(--green-tx);" data-key="gpu_enriched">
+      <div class="t">GPU-enriched sequences</div>
+      <div class="s">carbon_gpu_enrichment — multi_asset</div>
+    </div>
+
+    <!-- Split / Fork SVG Connector -->
+    <div class="fork-connector">
+      <svg viewBox="0 0 500 34" preserveAspectRatio="none">
+        <path d="M 250 0 L 250 14 M 125 14 L 375 14 M 125 14 L 125 28 M 375 14 L 375 28" 
+              stroke="var(--arrow-color)" stroke-width="1.5" fill="none" stroke-linejoin="round" />
+        <polygon points="121,27 129,27 125,33" fill="var(--arrow-color)" />
+        <polygon points="371,27 379,27 375,33" fill="var(--arrow-color)" />
+      </svg>
+    </div>
+
+    <!-- Side-by-side Fork Outputs -->
+    <div class="row-split">
+      <div class="node" style="--fill:var(--purple-bg); --bd:var(--purple-bd); --tx:var(--purple-tx);" data-key="likelihood_stats">
+        <div class="t">carbon-likelihood-stats</div>
+        <div class="s">likelihood / perplexity statistics per record</div>
+      </div>
+      <div class="node" style="--fill:var(--teal-bg); --bd:var(--teal-bd); --tx:var(--teal-tx);" data-key="embeddings">
+        <div class="t">carbon-embeddings</div>
+        <div class="s">3,075-dim. vector representation per record</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail Box -->
+  <div class="detail" id="detail">
+    <div class="k">
+      <span>Detail</span>
+      <span class="badge" id="detail-tag">Overview</span>
+    </div>
+    <div id="detail-body">Click any block above to inspect its data contract, execution runtime, and upstream/downstream semantics.</div>
+  </div>
+
+  <!-- Legend -->
+  <div class="legend">
+    <span><i style="--bd2:var(--coral-bd);--bg2:var(--coral-bg)"></i>Raw Corpus</span>
+    <span><i style="--bd2:var(--amber-bd);--bg2:var(--amber-bg)"></i>Partition &amp; Sample</span>
+    <span><i style="--bd2:var(--blue-bd);--bg2:var(--blue-bg)"></i>CPU Enrichment</span>
+    <span><i style="--bd2:var(--green-bd);--bg2:var(--green-bg)"></i>GPU Multi-Asset</span>
+    <span><i style="--bd2:var(--purple-bd);--bg2:var(--purple-bg)"></i>Likelihood Stats</span>
+    <span><i style="--bd2:var(--teal-bd);--bg2:var(--teal-bg)"></i>Vector Embeddings</span>
+  </div>
+</div>
+
+<script>
+const details = {
+  pretraining_corpus: {
+    tag: "Raw Ingestion",
+    text: `The foundation genomic pretraining corpus hosted on Hugging Face (HuggingFaceBio/carbon-pretraining-corpus). It comprises multi-species biological genomic records streamed over HTTP without copying the complete dataset locally. Kept deliberately streaming-only and excluded from direct catalog registration to preserve reproducible upstream provenance.<br><br><strong>Schema:</strong><div class="schema-wrap"><table class="schema-table"><thead><tr><th>Feature</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code>begin_of_sequence</code></td><td>string</td><td>Sequence-level beginning marker or source boundary metadata.</td></tr><tr><td><code>end_of_sequence</code></td><td>string</td><td>Sequence-level ending marker or source boundary metadata.</td></tr><tr><td><code>begin_of_gene</code></td><td>string</td><td>Gene-level beginning marker or annotation metadata.</td></tr><tr><td><code>end_of_gene</code></td><td>string</td><td>Gene-level ending marker or annotation metadata.</td></tr><tr><td><code>gene_type</code></td><td>string</td><td>Gene classification or type annotation.</td></tr><tr><td><code>species_type</code></td><td>string</td><td>Species or organism type annotation.</td></tr><tr><td><code>strand</code></td><td>string</td><td>DNA strand orientation associated with the sequence.</td></tr><tr><td><code>sequence</code></td><td>string</td><td>Underlying genomic sequence.</td></tr><tr><td><code>molecule_type</code></td><td>string</td><td>Type of biological molecule represented by the record.</td></tr><tr><td><code>topology</code></td><td>string</td><td>Topology annotation, such as linear or circular.</td></tr><tr><td><code>taxonomy</code></td><td>string</td><td>Taxonomic lineage or classification associated with the record.</td></tr><tr><td><code>record_id</code></td><td>string</td><td>Identifier linking the sequence to its source biological record.</td></tr><tr><td><code>start</code></td><td>int64</td><td>Starting position of the sequence interval in the processed corpus.</td></tr><tr><td><code>end</code></td><td>int64</td><td>Ending position of the sequence interval in the processed corpus.</td></tr></tbody></table></div>`
+  },
+  pretraining_split: {
+    tag: "Dataset Partition",
+    text: "Specifies the primary 75% training split under the 'eukaryote_generator' subset configuration. Filters down raw upstream sequences to target eukaryotic organisms, isolating high-value genomic regions while standardizing naming conventions, coordinate intervals, and FASTA/FASTQ source references before dispatch to CPU enrichment."
+  },
+  cpu_enriched: {
+    tag: "CPU Pipeline Asset",
+    text: `Consumes the eukaryotic training split via high-throughput streaming and processes sequences across multicore ProcessPoolExecutors using vectorized C/Rust kernels.<br><br><strong>Schema:</strong><div class="schema-wrap"><table class="schema-table"><thead><tr><th>Feature</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code>record_id</code></td><td>string</td><td>NCBI Identifier linking the row back to the source genomic record. It provides the primary record-level identity.</td></tr><tr><td><code>begin_of_sequence</code></td><td>string</td><td>Beginning-of-sequence special token marking the start of a sequence record, e.g. <code>&lt;s&gt;</code>.</td></tr><tr><td><code>end_of_sequence</code></td><td>string</td><td>End-of-sequence special token marking the end of a sequence record, e.g. <code>&lt;/s&gt;</code>.</td></tr><tr><td><code>begin_of_gene</code></td><td>string</td><td>Marker identifying the beginning of a gene/feature segment, e.g. <code>&lt;bog&gt;</code>.</td></tr><tr><td><code>end_of_gene</code></td><td>string</td><td>Marker identifying the end of a gene/feature segment, e.g. <code>&lt;eog&gt;</code>.</td></tr><tr><td><code>gene_type</code></td><td>string</td><td>Annotation describing the type of genomic feature. In the observed data, <code>&lt;cds&gt;</code> represents a coding sequence and <code>&lt;fng&gt;</code> represents another gene-feature category.</td></tr><tr><td><code>species_type</code></td><td>string</td><td>Broad biological category of the source sequence. The current data is represented as <code>Eukaryota</code>.</td></tr><tr><td><code>strand</code></td><td>string</td><td>DNA strand/orientation associated with the sequence, represented by <code>+</code> or <code>-</code>.</td></tr><tr><td><code>sequence</code></td><td>string</td><td>The actual nucleotide sequence represented by the record. This is the primary biological sequence field.</td></tr><tr><td><code>molecule_type</code></td><td>string</td><td>Molecular type of the sequence; the current data is represented as <code>DNA</code>.</td></tr><tr><td><code>topology</code></td><td>string</td><td>Structural topology of the molecule, such as <code>linear</code>.</td></tr><tr><td><code>taxonomy</code></td><td>string</td><td>Hierarchical taxonomic lineage of the sequence, with ranks represented as a semicolon-separated lineage, e.g. <code>Eukaryota;Fungi;...;Agaricus</code>.</td></tr><tr><td><code>start</code></td><td>int64</td><td>Starting position of the record within the pre-trained Carbon corpus. It is a corpus coordinate, not necessarily a genomic coordinate.</td></tr><tr><td><code>end</code></td><td>int64</td><td>Ending position of the record within the processed/tokenized Carbon corpus.</td></tr><tr><td><code>gc_content</code></td><td>float64</td><td>Fraction of nucleotides that are G or C: <code>(G + C) / sequence_length</code>. It measures GC composition.</td></tr><tr><td><code>gc_skew</code></td><td>float64</td><td>Measures asymmetry between G and C: <code>(G - C) / (G + C)</code>. Positive values indicate relative G enrichment; negative values indicate relative C enrichment.</td></tr><tr><td><code>sequence_length</code></td><td>int64</td><td>Number of nucleotide bases in the sequence.</td></tr><tr><td><code>gene_length</code></td><td>int64</td><td>Length of the associated gene/feature sequence. For the current records it commonly corresponds to <code>sequence_length</code>.</td></tr><tr><td><code>shannon_entropy</code></td><td>float64</td><td>Sequence-complexity measure based on nucleotide-frequency distribution.</td></tr><tr><td><code>kmer_frequency_vector</code></td><td>list</td><td>A 64-element vector containing normalized frequencies of all possible DNA 3-mers (<code>4³ = 64</code>). It captures local sequence-composition patterns.</td></tr><tr><td><code>strand_normalized_sequence</code></td><td>string</td><td>Sequence transformed into a consistent orientation so that strand direction does not create artificial differences in downstream analysis.</td></tr><tr><td><code>taxonomy_domain</code></td><td>string</td><td>Broadest taxonomic/domain-level classification extracted from the taxonomy hierarchy.</td></tr><tr><td><code>taxonomy_depth</code></td><td>int64</td><td>Number of taxonomic levels represented in the lineage. It provides a compact measure of how deeply the sequence is classified.</td></tr><tr><td><code>is_coding_region</code></td><td>bool</td><td>Boolean indicator of whether the record is classified as a coding sequence. The pipeline identifies <code>&lt;cds&gt;</code> as the coding gene type.</td></tr><tr><td><code>qc_flag</code></td><td>string</td><td>Quality-control status assigned to the record, indicating whether it passes the pipeline's sequence-level QC criteria.</td></tr></tbody></table></div>`
+  },
+  sampled_population: {
+    tag: "Stratified Sampling",
+    text: "Generates the pilot population ('carbon-pilot-corpus') used for resource-intensive GPU operations. Executes deterministic per-row SHA-256 hashing partitioned across multiple strata: sequence length buckets, coding vs non-coding status, forward/reverse strand orientation, and taxonomic phylogenetic domain.<br><br><strong>Schema:</strong> <code>begin_of_sequence</code>, <code>end_of_sequence</code>, <code>begin_of_gene</code>, <code>end_of_gene</code>, <code>gene_type</code>, <code>species_type</code>, <code>strand</code>, <code>sequence</code>, <code>molecule_type</code>, <code>topology</code>, <code>taxonomy</code>, <code>record_id</code>, <code>start</code>, <code>end</code>, <code>gc_content</code>, <code>gc_skew</code>, <code>sequence_length</code>, <code>gene_length</code>, <code>shannon_entropy</code>, <code>kmer_frequency_vector</code>, <code>strand_normalized_sequence</code>, <code>taxonomy_domain</code>, <code>taxonomy_depth</code>, <code>is_coding_region</code>, <code>qc_flag</code>"
+  },
+  gpu_enriched: {
+    tag: "Multi-Asset Execution",
+    text: "Orchestrates tokenized sequences through the Carbon-3B transformer backbone. Handles static sequence bucket packing, dynamic batch sizing, flash-attention kernels, and an automated OOM retry cascade. Acts as a Dagster multi_asset step that synchronously evaluates forward-pass loss and extracts high-dimensional representations in a single GPU session."
+  },
+  likelihood_stats: {
+    tag: "Downstream Metric",
+    text: `Computes sequence-level cross-entropy loss, perplexity metrics, and token-level likelihood trajectories for each genomic sequence.<br><br><strong>Schema:</strong><div class="schema-wrap"><table class="schema-table"><thead><tr><th>Feature</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code>record_id</code></td><td>string</td><td>NCBI identifier linking the likelihood statistics to the corresponding source sequence record.</td></tr><tr><td><code>string_lengths</code></td><td>int64</td><td>Length of the corresponding source sequence/string.</td></tr><tr><td><code>start</code></td><td>int64</td><td>Starting token position in the processed/tokenized Carbon corpus.</td></tr><tr><td><code>end</code></td><td>int64</td><td>Ending token position in the processed/tokenized Carbon corpus.</td></tr><tr><td><code>mean_log_prob</code></td><td>float32</td><td>Mean log probability assigned to evaluated tokens.</td></tr><tr><td><code>sum_log_prob</code></td><td>float32</td><td>Aggregate sum of token-level log probabilities; affected by sequence length.</td></tr><tr><td><code>perplexity</code></td><td>float32</td><td>Exponential form of average negative log-likelihood; lower values indicate greater predictability.</td></tr><tr><td><code>supervised_position_count</code></td><td>int64</td><td>Number of token positions contributing to the likelihood calculation.</td></tr><tr><td><code>min_token_logprob</code></td><td>float32</td><td>Lowest token-level log probability encountered.</td></tr><tr><td><code>argmin_position</code></td><td>int64</td><td>Position of the token having <code>min_token_logprob</code>.</td></tr><tr><td><code>per_token_logprob_std</code></td><td>float32</td><td>Standard deviation of token-level log probabilities.</td></tr></tbody></table></div>`
+  },
+  embeddings: {
+    tag: "Vector Representations",
+    text: `Extracts pooled dense vector representations per genomic record from the final Carbon transformer layers. Persisted into vector indices and analytical tables for genomic search, taxonomy mapping, and cross-species comparisons.<br><br><strong>Schema:</strong><div class="schema-wrap"><table class="schema-table"><thead><tr><th>Feature</th><th>Type</th><th>Description</th></tr></thead><tbody><tr><td><code>record_id</code></td><td>string</td><td>NCBI identifier linking the embedding to its source biological sequence record.</td></tr><tr><td><code>start</code></td><td>int64</td><td>Starting token position in the processed/tokenized Carbon corpus.</td></tr><tr><td><code>end</code></td><td>int64</td><td>Ending token position in the processed/tokenized Carbon corpus.</td></tr><tr><td><code>embedding</code></td><td>list</td><td>Dense numerical vector representing the sequence in learned representation space.</td></tr><tr><td><code>embedding_norm</code></td><td>float32</td><td>L2 norm of the embedding vector; primarily a numerical diagnostic.</td></tr></tbody></table></div>`
+  }
+};
+
+const nodes = document.querySelectorAll('.node[data-key]');
+const detailBody = document.getElementById('detail-body');
+const detailTag = document.getElementById('detail-tag');
+
+nodes.forEach(node => {
+  node.addEventListener('click', () => {
+    nodes.forEach(n => n.classList.remove('active'));
+    node.classList.add('active');
+    
+    const key = node.dataset.key;
+    const item = details[key];
+    if (item) {
+      detailTag.textContent = item.tag;
+      detailBody.innerHTML = item.text; // Changed to innerHTML to render bold and code tags
+    }
+  });
+});
+</script>
+</body>
+</html>

@@ -2,42 +2,15 @@
 
 Data Enrichment pipeline for the [carbon-pretraining-corpus](https://huggingface.co/datasets/HuggingFaceBio/carbon-pretraining-corpus) dataset.
 
-## Datasets lineage
+## Lineage of Datasets
 
-```text
-                     PRETRAINING CORPUS
-                (HuggingFaceBio/carbon-pretraining-corpus)
-                             |
-                             v
-                   Pretraining split (75%)
-                             |
-                             | CPU enrichment
-                             v
-                carbon-cpu-enriched-sequences
-                     (~32.4M records)
-                             |
-                             | stratified corpus sampling
-                             | deterministic per-row SHA-256 hash
-                             | strata: length bucket, coding status,
-                             |         strand, taxonomy domain
-                             v
-                  Sampled CPU population
-                     (GPU input corpus)
-                             |
-                             | token-budgeted GPU processing
-                             v
-                    GPU-enriched sequences
-                             |
-                  +----------+----------+
-                  |                     |
-                  v                     v
-        carbon-likelihood-stats   carbon-embeddings
-        (likelihood/perplexity     (vector representations
-         statistics per record)     per record, indexed in LanceDB)
-```
+Explore the interactive diagram and their schemas:
+
+[View the interactive pipeline diagram](docs/carbon_pipeline_with_schemas.html)
+
 
 - [`carbon-cpu-enriched-sequences`](https://huggingface.co/datasets/AINovice2005/carbon-cpu-enriched-sequences) — output of the CPU enrichment stage; adds sequence-derived features (length, GC content, coding status, strand, taxonomy) to the pretraining split. Source for stratified sampling into the GPU input corpus.
-- [`carbon-pilot-corpus-dedup`](https://huggingface.co/datasets/AINovice2005/carbon-pilot-corpus-dedup) — deduplicated pilot corpus upstream of the pretraining split (3.22M records). Each row is a gene/sequence record with boundary/framing tokens, biological annotation (gene type, strand, taxonomy lineage, topology), raw and strand-normalized sequence, and derived features (GC content, GC skew, Shannon entropy, k-mer frequency vector, coding-region flag, QC flag).
+- [`carbon-cpu-enriched-sequences-sampled`](https://huggingface.co/datasets/AINovice2005/carbon-cpu-enriched-sequences-sampled) — A deduplicated sample upstream of `carbon-cpu-enriched-sequences` (3.22M records). Each row is a gene/sequence record with boundary/framing tokens, biological annotation (gene type, strand, taxonomy lineage, topology), raw and strand-normalized sequence, and derived features (GC content, GC skew, Shannon entropy, k-mer frequency vector, coding-region flag, QC flag).
 - [`carbon-likelihood-stats`](https://huggingface.co/datasets/AINovice2005/carbon-likelihood-stats) — per-record likelihood/perplexity statistics produced by running the Carbon-3B model over the sampled CPU population under a fixed token budget.
 - [`carbon-embeddings`](https://huggingface.co/datasets/AINovice2005/carbon-embeddings) — per-record embedding vectors produced by the same GPU enrichment pass, indexed into LanceDB for nearest-neighbor and similarity search.
 
