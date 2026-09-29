@@ -53,6 +53,8 @@ dagster-hf-datasets
 | Follow asset execution, resources, and configuration | [Pipeline Guide](docs/Pipeline.md) |
 | Find materialized outputs, metrics, and provenance | [Results and Outputs](docs/Results.md) |
 
+Check Docs on DeepWiki: [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ParagEkbote/hf-genomic-dataset-enrichment)
+
 ### Core References
 
 - [Dagster definitions](carbon-enrichment/carbon_enrichment/definitions.py) — asset graph, jobs, and registered resources.
