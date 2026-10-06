@@ -56,13 +56,15 @@ class ClickHouseResource:
             )
         self._binary = resolved
         if self.config.temp_directory is not None:
-            Path(self.config.temp_directory).expanduser().mkdir(parents=True, exist_ok=True)
+            Path(self.config.temp_directory).expanduser().mkdir(
+                parents=True, exist_ok=True
+            )
         return self._binary
 
     def close(self) -> None:
         self._binary = None
 
-    def __enter__(self) -> "ClickHouseResource":
+    def __enter__(self) -> ClickHouseResource:
         self.get_binary()
         return self
 
@@ -79,16 +81,28 @@ class ClickHouseResource:
         dataset_path = Path(path).expanduser()
         if not dataset_path.exists():
             raise FileNotFoundError(f"Parquet dataset does not exist: {dataset_path}")
-        glob_expr = str(dataset_path / "*.parquet") if dataset_path.is_dir() else str(dataset_path)
-        self._registered_datasets[name] = f"file('{self._escape_sql_string(glob_expr)}', Parquet)"
+        glob_expr = (
+            str(dataset_path / "*.parquet")
+            if dataset_path.is_dir()
+            else str(dataset_path)
+        )
+        self._registered_datasets[name] = (
+            f"file('{self._escape_sql_string(glob_expr)}', Parquet)"
+        )
 
-    def register_enriched_glob(self, name: str, directory: str | Path, pattern: str = "batch_*.parquet") -> None:
+    def register_enriched_glob(
+        self, name: str, directory: str | Path, pattern: str = "batch_*.parquet"
+    ) -> None:
         self._validate_relation_name(name)
         directory = Path(directory).expanduser()
         if not directory.exists():
-            raise FileNotFoundError(f"Enriched output directory does not exist: {directory}")
+            raise FileNotFoundError(
+                f"Enriched output directory does not exist: {directory}"
+            )
         glob_expr = str(directory / pattern)
-        self._registered_datasets[name] = f"file('{self._escape_sql_string(glob_expr)}', Parquet)"
+        self._registered_datasets[name] = (
+            f"file('{self._escape_sql_string(glob_expr)}', Parquet)"
+        )
 
     def get_hf_token(self) -> str | None:
         return self.config.hf_token or os.environ.get("HF_TOKEN")
@@ -100,9 +114,18 @@ class ClickHouseResource:
         escaped_token = self._escape_sql_string(token)
         return f"url('{escaped_url}', Parquet, 'auto', headers('Authorization'='Bearer {escaped_token}'))"
 
-    def register_hf_dataset(self, name: str, url_glob: str, *, revision: str = "main", pattern: str = "*.parquet") -> None:
+    def register_hf_dataset(
+        self,
+        name: str,
+        url_glob: str,
+        *,
+        revision: str = "main",
+        pattern: str = "*.parquet",
+    ) -> None:
         self._validate_relation_name(name)
-        resolved_glob = self._resolve_hf_glob(url_glob, revision=revision, pattern=pattern)
+        resolved_glob = self._resolve_hf_glob(
+            url_glob, revision=revision, pattern=pattern
+        )
         source = self._build_hf_url_source(resolved_glob, token=self.get_hf_token())
         self._registered_datasets[name] = source
 
@@ -110,10 +133,14 @@ class ClickHouseResource:
         self._validate_relation_name(name)
         if not shard_urls:
             raise ValueError("shard_urls cannot be empty")
-        normalized = [url for url in shard_urls if urlparse(url).scheme in {"http", "https"}]
+        normalized = [
+            url for url in shard_urls if urlparse(url).scheme in {"http", "https"}
+        ]
         if len(normalized) != len(shard_urls):
             raise ValueError("All Hugging Face shard URLs must use http:// or https://")
-        source = self._build_hf_url_source(self._hf_urls_to_clickhouse_glob(normalized), token=self.get_hf_token())
+        source = self._build_hf_url_source(
+            self._hf_urls_to_clickhouse_glob(normalized), token=self.get_hf_token()
+        )
         self._registered_datasets[name] = source
 
     def source_expr(self, name: str) -> str:
@@ -126,9 +153,18 @@ class ClickHouseResource:
     # ------------------------------------------------------------------
 
     @classmethod
-    def discover_hf_shards(cls, url_glob: str, *, revision: str = "main", pattern: str = "*.parquet", timeout: int = 30) -> list[str]:
+    def discover_hf_shards(
+        cls,
+        url_glob: str,
+        *,
+        revision: str = "main",
+        pattern: str = "*.parquet",
+        timeout: int = 30,
+    ) -> list[str]:
         if not cls._is_hf_dataset_url(url_glob):
-            raise ValueError("Hugging Face URL must have the form https://huggingface.co/datasets/<org>/<repo>/...")
+            raise ValueError(
+                "Hugging Face URL must have the form https://huggingface.co/datasets/<org>/<repo>/..."
+            )
         parsed = urlparse(url_glob)
         if not any(ch in parsed.path for ch in "*?{"):
             return [url_glob]
@@ -144,12 +180,16 @@ class ClickHouseResource:
         if revision != "main" and url_revision == "main":
             url_revision = revision
         api_url = f"https://huggingface.co/api/datasets/{repo}/tree/{url_revision}?recursive=true&limit=1000"
-        req = Request(api_url, headers={"User-Agent": "carbon-enrichment-clickhouse/1.0"})
+        req = Request(
+            api_url, headers={"User-Agent": "carbon-enrichment-clickhouse/1.0"}
+        )
         try:
             with urlopen(req, timeout=timeout) as response:
                 payload = json.load(response)
         except Exception as exc:
-            raise RuntimeError(f"Failed to query Hugging Face dataset tree for {repo}@{url_revision}: {exc}") from exc
+            raise RuntimeError(
+                f"Failed to query Hugging Face dataset tree for {repo}@{url_revision}: {exc}"
+            ) from exc
         shard_paths: list[str] = []
         for entry in payload:
             path = str(entry.get("path", ""))
@@ -158,12 +198,19 @@ class ClickHouseResource:
             if fnmatch.fnmatch(path, path_pattern):
                 shard_paths.append(path)
         if not shard_paths:
-            raise RuntimeError(f"No Parquet shards matched {url_glob} in Hugging Face dataset {repo}@{url_revision}.")
+            raise RuntimeError(
+                f"No Parquet shards matched {url_glob} in Hugging Face dataset {repo}@{url_revision}."
+            )
         shard_paths.sort()
-        return [f"https://huggingface.co/datasets/{repo}/resolve/{url_revision}/{path}" for path in shard_paths]
+        return [
+            f"https://huggingface.co/datasets/{repo}/resolve/{url_revision}/{path}"
+            for path in shard_paths
+        ]
 
     @classmethod
-    def _resolve_hf_glob(cls, url_glob: str, *, revision: str = "main", pattern: str = "*.parquet") -> str:
+    def _resolve_hf_glob(
+        cls, url_glob: str, *, revision: str = "main", pattern: str = "*.parquet"
+    ) -> str:
         urls = cls.discover_hf_shards(url_glob, revision=revision, pattern=pattern)
         return cls._hf_urls_to_clickhouse_glob(urls)
 
@@ -178,7 +225,11 @@ class ClickHouseResource:
     @staticmethod
     def _is_hf_dataset_url(url: str) -> bool:
         parsed = urlparse(url)
-        return parsed.scheme in {"http", "https"} and parsed.netloc == "huggingface.co" and parsed.path.startswith("/datasets/")
+        return (
+            parsed.scheme in {"http", "https"}
+            and parsed.netloc == "huggingface.co"
+            and parsed.path.startswith("/datasets/")
+        )
 
     # ------------------------------------------------------------------
     # Query / execute
@@ -189,20 +240,29 @@ class ClickHouseResource:
         if self.config.threads is not None:
             args += ["--max_threads", str(self.config.threads)]
         args += [
-            "--join_algorithm", self.config.join_algorithm,
-            "--joined_subquery_requires_alias", "0",
-            "--max_http_get_redirects", str(self.config.max_http_get_redirects),
-            "--allow_experimental_url_wildcard_from_index_pages", "1",
-            "--max_download_threads", str(self.config.max_download_threads),
-            "--max_parsing_threads", str(self.config.max_parsing_threads),
-            "--max_download_buffer_size", str(self.config.max_download_buffer_size),
-            "--input_format_parquet_use_native_reader", "1",
-            "--remote_filesystem_read_method", "threadpool",
-            
+            "--join_algorithm",
+            self.config.join_algorithm,
+            "--joined_subquery_requires_alias",
+            "0",
+            "--max_http_get_redirects",
+            str(self.config.max_http_get_redirects),
+            "--allow_experimental_url_wildcard_from_index_pages",
+            "1",
+            "--max_download_threads",
+            str(self.config.max_download_threads),
+            "--max_parsing_threads",
+            str(self.config.max_parsing_threads),
+            "--max_download_buffer_size",
+            str(self.config.max_download_buffer_size),
+            "--input_format_parquet_use_native_reader",
+            "1",
+            "--remote_filesystem_read_method",
+            "threadpool",
             # --- PERFORMANCE FLAGS FOR PARALLEL READ/WRITE ---
-            "--max_insert_threads", str(self.config.threads or 8),
-            "--remote_filesystem_read_prefetch", "1",
-            
+            "--max_insert_threads",
+            str(self.config.threads or 8),
+            "--remote_filesystem_read_prefetch",
+            "1",
             "--progress",
         ]
         if extra_args:
@@ -210,7 +270,9 @@ class ClickHouseResource:
         return args
 
     @staticmethod
-    def _substitute_parameters(sql: str, parameters: list[Any] | tuple[Any, ...] | None) -> str:
+    def _substitute_parameters(
+        sql: str, parameters: list[Any] | tuple[Any, ...] | None
+    ) -> str:
         if not parameters:
             return sql
         remaining = list(parameters)
@@ -239,14 +301,18 @@ class ClickHouseResource:
         was being tacked onto INSERT statements by query_arrow and is the
         main reason ingestion throughput collapsed to ~1k rows/sec."""
         final_sql = self._substitute_parameters(sql, parameters)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", encoding="utf-8", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".sql", encoding="utf-8", delete=False
+        ) as f:
             f.write(final_sql)
             query_file = f.name
         try:
             cmd = self._base_args(extra_args) + ["--queries-file", query_file]
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=None)
             if result.returncode != 0:
-                raise RuntimeError(f"clickhouse local statement failed with exit code {result.returncode}")
+                raise RuntimeError(
+                    f"clickhouse local statement failed with exit code {result.returncode}"
+                )
         finally:
             Path(query_file).unlink(missing_ok=True)
 
@@ -355,7 +421,12 @@ class ClickHouseResource:
         finally:
             Path(query_file).unlink(missing_ok=True)
 
-    def query_arrow(self, sql: str, parameters: list[Any] | tuple[Any, ...] | None = None, extra_args: list[str] | None = None) -> pa.Table:
+    def query_arrow(
+        self,
+        sql: str,
+        parameters: list[Any] | tuple[Any, ...] | None = None,
+        extra_args: list[str] | None = None,
+    ) -> pa.Table:
         """For statements that return rows only. Do not use this for
         INSERT/DDL — use execute_sql instead."""
         final_sql = self._substitute_parameters(sql, parameters)
@@ -363,21 +434,35 @@ class ClickHouseResource:
         {final_sql}
         FORMAT Arrow
         """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", encoding="utf-8", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".sql", encoding="utf-8", delete=False
+        ) as f:
             f.write(final_sql)
             query_file = f.name
         try:
             cmd = self._base_args(extra_args) + ["--queries-file", query_file]
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=None)
             if result.returncode != 0:
-                raise RuntimeError(f"clickhouse local query failed with exit code {result.returncode}")
+                raise RuntimeError(
+                    f"clickhouse local query failed with exit code {result.returncode}"
+                )
             return pa.ipc.open_file(pa.BufferReader(result.stdout)).read_all()
         finally:
             Path(query_file).unlink(missing_ok=True)
 
-    def stream_arrow_batches(self, sql: str, parameters: list[Any] | tuple[Any, ...] | None = None, extra_args: list[str] | None = None):
+    def stream_arrow_batches(
+        self,
+        sql: str,
+        parameters: list[Any] | tuple[Any, ...] | None = None,
+        extra_args: list[str] | None = None,
+    ):
         final_sql = self._substitute_parameters(sql, parameters)
-        cmd = self._base_args(extra_args) + ["--query", final_sql, "--format", "ArrowStream"]
+        cmd = self._base_args(extra_args) + [
+            "--query",
+            final_sql,
+            "--format",
+            "ArrowStream",
+        ]
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=None)
         if process.stdout is None:
             process.kill()
@@ -390,7 +475,9 @@ class ClickHouseResource:
             process.stdout.close()
             returncode = process.wait()
             if returncode != 0:
-                raise RuntimeError(f"clickhouse local streaming query failed with exit code {returncode}")
+                raise RuntimeError(
+                    f"clickhouse local streaming query failed with exit code {returncode}"
+                )
 
     # ------------------------------------------------------------------
     # Introspection

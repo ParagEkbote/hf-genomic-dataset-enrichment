@@ -234,9 +234,7 @@ PIPELINE_TABLES: dict[str, PipelineTableSpec] = {
         "config": None,
         "upstream": None,
         "access_mode": "streaming",
-        "description": (
-            "Root source corpus (eukaryote_generator/train split)."
-        ),
+        "description": ("Root source corpus (eukaryote_generator/train split)."),
     },
     "cpu_enriched": {
         "table": "carbon.cpu_enriched_sequences",
@@ -377,7 +375,6 @@ class PipelineCatalog:
     ) -> PipelineCatalog:
         """Create a filesystem-backed Faceberg catalog."""
 
-        import os
         script_dir = Path(__file__).resolve().parent
         catalog_path = script_dir / "carbon-catalog"
         catalog_path.mkdir(parents=True, exist_ok=True)
@@ -387,7 +384,7 @@ class PipelineCatalog:
         cat = _LocalCatalog(
             name="carbon",
             uri=f"file://{catalog_path}",
-            warehouse="hf://buckets/AINovice2005/carbon-catalog"
+            warehouse="hf://buckets/AINovice2005/carbon-catalog",
         )
 
         return cls(
@@ -670,6 +667,7 @@ def get_catalog(
 
     raise ValueError(f"mode must be 'local' or 'remote', got {mode!r}")
 
+
 def _print_tree_view(cat_uri: str, cat: Any) -> None:
     """Minimal reimplementation of faceberg's --tree-view output.
 
@@ -715,7 +713,9 @@ def _cli() -> None:
         prog="facebergs-sync",
         description="Patched sync for Carbon's Faceberg catalog.",
     )
-    parser.add_argument("catalog_id", help="e.g. hf://buckets/AINovice2005/carbon-catalog")
+    parser.add_argument(
+        "catalog_id", help="e.g. hf://buckets/AINovice2005/carbon-catalog"
+    )
     parser.add_argument("command", choices=["sync"])
     parser.add_argument("--tree-view", action="store_true")
     args = parser.parse_args()

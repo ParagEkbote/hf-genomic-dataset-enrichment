@@ -149,7 +149,7 @@ def _read_local_parquet(
     for shard_path in shard_paths:
         parquet_file = pq.ParquetFile(shard_path)
         for record_batch in parquet_file.iter_batches(batch_size=batch_size):
-            yield record_batch
+            yield from parquet_file.iter_batches(batch_size=batch_size)
 
 
 def _read_hub_dataset(
@@ -285,7 +285,8 @@ def _process_batch(
 
     if normalized_rows != raw_rows:
         raise RuntimeError(
-            f"Normalization changed the number of rows: input={raw_rows}, output={normalized_rows}"
+            f"Normalization changed the number of rows: "
+            f"input={raw_rows}, output={normalized_rows}"
         )
 
     local_stats = ValidationStats()

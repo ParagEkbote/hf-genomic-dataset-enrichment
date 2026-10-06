@@ -248,7 +248,7 @@ def _has_missing_boundary_tokens_vec(
     return np.array(
         [
             (not seq) or begin != "<s>" or end != "</s>"
-            for seq, begin, end in zip(sequences, begin_tokens, end_tokens)
+            for seq, begin, end in zip(sequences, begin_tokens, end_tokens,strict=True,)
         ]
     )
 

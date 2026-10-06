@@ -689,7 +689,7 @@ def plot_correlations(df, output):
     max_abs = max(float(np.abs(tmp["rho"]).max()), 0.01)
     label_offset = max_abs * 0.025
 
-    for b, v in zip(bars, tmp.rho):
+    for b, v in zip(bars, tmp.rho,strict=True,):
         # Place values inside the bar to avoid collision with category labels.
         if v >= 0:
             x = v - label_offset

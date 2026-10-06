@@ -269,7 +269,7 @@ def annotate_bar_values(
         default=0,
     )
 
-    for bar, value in zip(bars, values):
+    for bar, value in zip(bars, values, strict=True):
         if not np.isfinite(value):
             continue
 

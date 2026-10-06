@@ -420,6 +420,7 @@ def _validate_boundaries(
     for begin, end in zip(
         begins,
         ends,
+        strict=True,
     ):
         pair = (
             begin,

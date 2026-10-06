@@ -401,7 +401,7 @@ h1 {
     <!-- Split / Fork SVG Connector -->
     <div class="fork-connector">
       <svg viewBox="0 0 500 34" preserveAspectRatio="none">
-        <path d="M 250 0 L 250 14 M 125 14 L 375 14 M 125 14 L 125 28 M 375 14 L 375 28" 
+        <path d="M 250 0 L 250 14 M 125 14 L 375 14 M 125 14 L 125 28 M 375 14 L 375 28"
               stroke="var(--arrow-color)" stroke-width="1.5" fill="none" stroke-linejoin="round" />
         <polygon points="121,27 129,27 125,33" fill="var(--arrow-color)" />
         <polygon points="371,27 379,27 375,33" fill="var(--arrow-color)" />
@@ -481,7 +481,7 @@ nodes.forEach(node => {
   node.addEventListener('click', () => {
     nodes.forEach(n => n.classList.remove('active'));
     node.classList.add('active');
-    
+
     const key = node.dataset.key;
     const item = details[key];
     if (item) {
