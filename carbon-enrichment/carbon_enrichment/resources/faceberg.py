@@ -165,7 +165,9 @@ def _patched_write_manifest(
         parquet_files = [pf for _, pf in files]
         data_files = list(executor.map(convert_file, parquet_files))
 
-    data_file_map = {pf.uri: df for pf, df in zip(parquet_files, data_files)}
+    data_file_map = {
+        pf.uri: df for pf, df in zip(parquet_files, data_files, strict=True)
+    }
     entries = []
     with _write_manifest(
         format_version=2,

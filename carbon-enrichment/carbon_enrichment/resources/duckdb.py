@@ -272,10 +272,7 @@ def stratum_proportions(
 
         result[field] = {
             str(key): float(value)
-            for key, value in zip(
-                subset["stratum"],
-                subset["proportion"],
-            )
+            for key, value in zip(subset["stratum"], subset["proportion"], strict=True)
         }
 
     return result

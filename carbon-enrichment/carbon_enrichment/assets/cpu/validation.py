@@ -509,6 +509,7 @@ def _validate_coordinates(
     for start, end in zip(
         batch.get("start", []),
         batch.get("end", []),
+        strict=True
     ):
         try:
             start_value = float(start)

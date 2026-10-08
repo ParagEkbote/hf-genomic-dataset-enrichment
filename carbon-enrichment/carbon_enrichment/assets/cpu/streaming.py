@@ -148,7 +148,7 @@ def _read_local_parquet(
 
     for shard_path in shard_paths:
         parquet_file = pq.ParquetFile(shard_path)
-        for record_batch in parquet_file.iter_batches(batch_size=batch_size):
+        for _record_batch in parquet_file.iter_batches(batch_size=batch_size):
             yield from parquet_file.iter_batches(batch_size=batch_size)
 
 

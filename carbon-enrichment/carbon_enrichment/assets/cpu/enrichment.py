@@ -248,7 +248,7 @@ def _has_missing_boundary_tokens_vec(
     return np.array(
         [
             (not seq) or begin != "<s>" or end != "</s>"
-            for seq, begin, end in zip(sequences, begin_tokens, end_tokens,strict=True,)
+            for seq, begin, end in zip(sequences, begin_tokens, end_tokens, strict=True)
         ]
     )
 
@@ -385,7 +385,7 @@ def enrich_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
 
     strand_normalized_sequence = [
         _reverse_complement(seq) if strand == "<->" else seq
-        for seq, strand in zip(sequences, strands)
+        for seq, strand in zip(sequences, strands, strict=True)
     ]
 
     # ------------------------------------------------------------------------
