@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 import pyarrow as pa
 
 DEFAULT_THREADS = max(1, (os.cpu_count() or 1) - 1)
-DEFAULT_BINARY = "/teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/clickhouse"
+DEFAULT_BINARY = "/teamspace/studios/this_studio/hf-genomic-dataset-enrichment/carbon-enrichment/carbon_enrichment/results/visualization/clickhouse"
 DEFAULT_TEMP_DIRECTORY = Path("data/tmp/clickhouse")
 
 
