@@ -1,0 +1,22 @@
+{
+  "metadata_rows": 244046,
+  "embedding_rows_matched": 244046,
+  "embedding_dimension": 3072,
+  "minimum_group_size": 20,
+  "taxonomy_depth": 5,
+  "cpu_color_column": "shannon_entropy",
+  "gpu_profile_column": "mean_log_prob",
+  "outputs": [
+    "01_taxonomy_embedding_dispersion.html",
+    "02_taxonomy_cpu_composition.html",
+    "03_cpu_vs_gpu_profiles.html"
+  ],
+  "elapsed_seconds": 214.94,
+  "notes": [
+    "Taxonomy strings are treated as ordered semicolon-delimited lineage components, not guaranteed named ranks.",
+    "Embedding dispersion is cosine distance to the deepest adequately sampled taxonomic ancestor centroid.",
+    "Embedding Parquet shards are read remotely through ClickHouseResource in ArrowStream batches; no manual Hub dataset download is performed.",
+    "Chart 02 GC bands and chart 03 CPU/GPU profiles use corpus-relative quantile bins.",
+    "Chart 03 is a descriptive cross-tabulation, not proof that GPU embeddings add biological information."
+  ]
+}

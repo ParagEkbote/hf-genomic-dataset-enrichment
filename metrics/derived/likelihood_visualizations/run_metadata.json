@@ -1,0 +1,35 @@
+{
+  "likelihood_unique_keys": 244046,
+  "metadata_rows": 244046,
+  "joined_rows_with_likelihood": 244046,
+  "duplicate_key_handling": {
+    "corpus_likelihood_total_raw_rows": 251427,
+    "corpus_likelihood_unique_keys": 244046,
+    "corpus_likelihood_keys_with_duplicates": 7251,
+    "corpus_likelihood_disagreeing_keys": 10,
+    "corpus_likelihood_max_spread": 0.009298324584960938,
+    "joined_keys_with_likelihood_duplicates": 7251,
+    "joined_keys_missing_likelihood": 0,
+    "joined_likelihood_max_spread": 0.009298324584960938,
+    "joined_keys_with_cpu_cohort_duplicates": 0
+  },
+  "correlation_columns": [
+    "mean_log_prob",
+    "perplexity",
+    "sum_log_prob",
+    "min_token_logprob",
+    "per_token_logprob_std",
+    "gc_content",
+    "shannon_entropy",
+    "sequence_length"
+  ],
+  "correlation_method": "spearman",
+  "plot_03_score": "Raw mean log probability (not Markov-corrected)",
+  "elapsed_seconds": 13.39,
+  "notes": [
+    "Duplicate (record_id, start, end) keys in carbon-likelihood-stats are collapsed via SQL GROUP BY in both standalone and joined caches.",
+    "Plot 03 uses raw mean_log_prob unless a precomputed markov_residual column is present.",
+    "Plot 04 treats semicolon-delimited taxonomy strings as ordered lineage prefixes rather than named taxonomic ranks.",
+    "Plot 06 duplication counts are exact SHA-256 sequence-hash frequencies within the common cohort only."
+  ]
+}

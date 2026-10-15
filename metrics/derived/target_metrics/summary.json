@@ -1,0 +1,36 @@
+{
+  "groups": {
+    "Colpocephalum": [
+      "NC_039530.1"
+    ],
+    "Echinococcus": [
+      "NC_021144.1",
+      "NW_020170482.1"
+    ]
+  },
+  "target_intervals": 10,
+  "targets_without_vectors": 0,
+  "null_pairs": 199562,
+  "null_cosine_distance_percentiles": {
+    "p01": 0.0008836781978607178,
+    "p05": 0.001773238182067871,
+    "p50": 0.011276692152023315,
+    "p95": 0.06942324042320247
+  },
+  "null_euclidean_distance_percentiles": {
+    "p01": 11.309577255249025,
+    "p05": 16.03726119995117,
+    "p50": 59.30767822265625,
+    "p95": 151.06708984374998
+  },
+  "full_corpus_rank_rows": 10,
+  "umap_pair_rows": 0,
+  "spearman_cosine_distance_vs_3mer_js": 0.3856511490621568,
+  "spearman_cosine_distance_vs_abs_delta_gc": 0.15448160524409774,
+  "knn_baseline": {
+    "edges_read": 2510520,
+    "edges_used_for_baseline": 2289811,
+    "baseline_same_taxon_fraction": 0.18139182666167644
+  },
+  "elapsed_seconds": 137.1
+}
