@@ -1,0 +1,5 @@
+taxon,rows,candidate_key_nonmissing,candidate_key_distinct,candidate_key_duplicate_excess,record_id_nonmissing,record_id_distinct,record_id_duplicate_excess,sequence_nonmissing,sequence_distinct,sequence_duplicate_excess,sequence_conflict_true_rows,likelihood_duplicate_key_true_rows,embedding_conflict_true_rows,cpu_source_rows_sum,cpu_source_rows_median,likelihood_source_rows_sum,likelihood_source_rows_median,embedding_source_rows_sum,embedding_source_rows_median,cpu_distinct_sequences_sum,cpu_distinct_sequences_median,likelihood_duplicate_key_sum,likelihood_duplicate_key_median,embedding_distinct_vectors_sum,embedding_distinct_vectors_median
+Colletotrichum,471,471,471,0,471,66,405,471,471,0,0,0,0,471.0,1.0,471.0,1.0,471.0,1.0,471.0,1.0,0.0,0.0,471.0,1.0
+Aspergillus,556,556,556,0,556,110,446,556,556,0,0,0,0,556.0,1.0,556.0,1.0,556.0,1.0,556.0,1.0,0.0,0.0,556.0,1.0
+Apocrita,4,4,4,0,4,4,0,4,4,0,0,0,0,4.0,1.0,4.0,1.0,4.0,1.0,4.0,1.0,0.0,0.0,4.0,1.0
+Brachycera,15,15,15,0,15,12,3,15,13,2,0,0,0,15.0,1.0,15.0,1.0,15.0,1.0,15.0,1.0,0.0,0.0,15.0,1.0

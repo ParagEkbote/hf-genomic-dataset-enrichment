@@ -1,0 +1,7 @@
+taxon_a,taxon_b,rows_a,rows_b,median_mean_log_prob_a,median_mean_log_prob_b,median_mean_log_prob_difference_a_minus_b,exact_sequence_overlap_count,taxonomy_column_used,note
+Colletotrichum,Aspergillus,471,556,-4.673749923706055,-4.907599210739136,0.23384928703308105,0,taxonomy,"Descriptive, unadjusted comparison; rows may be dependent and group sizes may differ."
+Colletotrichum,Apocrita,471,4,-4.673749923706055,-5.997886657714844,1.324136734008789,0,taxonomy,"Descriptive, unadjusted comparison; rows may be dependent and group sizes may differ."
+Colletotrichum,Brachycera,471,15,-4.673749923706055,-4.237749099731445,-0.4360008239746094,0,taxonomy,"Descriptive, unadjusted comparison; rows may be dependent and group sizes may differ."
+Aspergillus,Apocrita,556,4,-4.907599210739136,-5.997886657714844,1.090287446975708,0,taxonomy,"Descriptive, unadjusted comparison; rows may be dependent and group sizes may differ."
+Aspergillus,Brachycera,556,15,-4.907599210739136,-4.237749099731445,-0.6698501110076904,0,taxonomy,"Descriptive, unadjusted comparison; rows may be dependent and group sizes may differ."
+Apocrita,Brachycera,4,15,-5.997886657714844,-4.237749099731445,-1.7601375579833984,0,taxonomy,"Descriptive, unadjusted comparison; rows may be dependent and group sizes may differ."
