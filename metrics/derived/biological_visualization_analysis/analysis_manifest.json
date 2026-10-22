@@ -1,0 +1,34 @@
+{
+  "inputs": {
+    "edges": "metrics/derived/phase4/knn_neighbors.csv",
+    "taxonomy": "metrics/derived/common_cohort/taxon_analysis/common_cohort_taxonomy.csv",
+    "published_summary": "metrics/derived/embedding_visualizations/plot04_knn_lineage_agreement.csv",
+    "metadata": "metrics/derived/embedding_visualizations/run_metadata.json"
+  },
+  "taxonomy_rows": 244046,
+  "unique_interval_keys": 244046,
+  "duplicate_taxonomy_interval_keys": 0,
+  "empty_lineages": 0,
+  "input_edges": 2510520,
+  "same_interval_edges_excluded": 15018,
+  "missing_endpoint_keys": 0,
+  "eligible_edges": 2495502,
+  "distinct_query_interval_clusters": 243671,
+  "baseline_ratio": "edge-weighted; eligible if both lineages have at least the tested depth",
+  "bootstrap": {
+    "unit": "query interval key, retaining all outgoing edges",
+    "replicates": 1000,
+    "seed": 20261020,
+    "interval": "percentile 95%"
+  },
+  "permutation_null": {
+    "unit": "whole lineage label assigned to interval nodes",
+    "strata": ["lineage length", "exact outgoing degree", "incoming-degree decile"],
+    "graph_fixed": true,
+    "permutations": 499,
+    "seed": 20261021,
+    "test": "one-sided observed agreement greater than or equal to null",
+    "multiplicity": "Holm correction across 12 depths"
+  },
+  "deduplication": "not estimable: interval-to-SHA256 sequence hash artifact absent"
+}
