@@ -1,0 +1,51 @@
+# Composition analysis of raw UMAP candidate `raw_C2_e1_m20`
+
+## Summary
+
+The exact 3,501-key candidate is strongly associated with GC content in the sampled cohort and remains moderately shifted toward higher GC within Fungi. Shannon entropy differs only slightly within Fungi, with extensive distributional overlap. Thus simple composition is a plausible correlate and may contribute to the candidate's projected separation, especially through GC content; this analysis cannot show that composition causes the UMAP geometry or explains the candidate's taxonomic composition. It does not establish a biological cluster.
+
+The candidate membership is a reproducible density-defined region in the existing raw 2D UMAP. It is not retained as a distinct component in the separately fitted whitened projection. No original embedding matrix is available locally, so this report makes no original-space stability claim.
+
+## Membership and source-data join
+
+I read `umap_dbscan_memberships.csv` and selected rows where `panel=raw` and `eps_1_min20_cluster=2`, which represents eps=1.0 and min_samples=20. This produced exactly 3,501 unique `(record_id, start, end)` keys. Kingdom counts are 3,419 Fungi and 82 Metazoa, matching the previous report (97.66% Fungi). The comparison set is the other 16,499 keys from the same 20,000-point raw UMAP sample.
+
+The generator in `phase4.py` creates plot07 from the projection sample after dropping rows missing either `gc_content` or `shannon_entropy`. It plots the raw UMAP coordinates twice: color encodes `gc_content` in the GC trace and `shannon_entropy` in the Entropy trace. Both use continuous color scales (Viridis and Plasma respectively). Trace text is the full semicolon-delimited taxonomy lineage, which appears in default hover information; x/y are raw UMAP coordinates. The traces do not embed interval keys or explicit custom hover key fields. The source pipeline's standalone projection parquet is not present in the local delivered artifacts, so point-level composition values were extracted from the HTML's continuous color arrays.
+
+To connect those values to interval keys, I matched each plot07 coordinate pair to the raw x/y coordinates embedded in plot02. Both use float32 coordinates. Coordinates were matched after rounding to five decimal places; the plot02 raw coordinate pairs are unique at that precision. Every one of the 20,000 plot07 points in both traces matched exactly one plot02 raw coordinate/key, with zero unmatched points. The plot07 traces have 20,000 points each, identical point order and full taxonomy lineages, and their derived kingdom counts are Fungi 13,906 and Metazoa 6,094, identical to the plot02 raw sample. Thus the composition figure uses the same sample/key cohort as the raw projection for these records. The trace text is finer than plot02's kingdom text, so direct string equality between those two text fields is not expected; lineage-derived kingdom counts agree exactly.
+
+All 20,000 matched GC and entropy values are finite. Since plot07 was generated after dropping rows missing either value, this establishes no missing composition values among its projected sample: missingness is 0/3,501 (0%) in the candidate and 0/16,499 (0%) in non-candidate points for both variables. No candidate or comparison key was unmatched, and no duplicate interval keys exist in the exact candidate membership or plot02 key table. The coordinate bridge is explicit and validated, but the IDs themselves are not stored in plot07; this is a limitation of that figure's design.
+
+The joined key/value table is `umap_candidate_composition_join.csv`. The numeric comparison table is `umap_candidate_composition_summary.csv`. `umap_candidate_composition_analysis.py` records the extraction and analysis steps.
+
+## Comparisons
+
+Candidate and non-candidate samples are compared within the same 20,000 interval sample. For kingdom strata, the same candidate labels are used. Values are on the source feature scales: GC content is a fraction; Shannon entropy is in the units produced by the pipeline. Mean difference is candidate minus non-candidate. SMD is the pooled-standard-deviation mean difference. AUC is the probability that a randomly selected candidate has a higher value than a randomly selected comparator, with ties counted as one half; rank-biserial is `2*AUC-1`. AUC and the two groups' medians/IQRs describe distributional overlap beyond the means. KS D is the maximum absolute empirical-CDF difference (descriptive, no p value).
+
+Bootstrap intervals below are percentile 95% intervals for the difference in means from 1,000 independent row-resampling replicates, with seed 72319. They quantify sampling variation under an interval-independent resampling scheme, not uncertainty under genome-level or sequence-family sampling.
+
+| Variable | Stratum | Candidate n; missing | Non-candidate n; missing | Candidate mean ± SD (median; Q1–Q3) | Non-candidate mean ± SD (median; Q1–Q3) | Mean difference (95% bootstrap CI) | SMD | AUC (rank-biserial) | KS D |
+|---|---|---:|---:|---|---|---:|---:|---:|---:|
+| GC fraction | All | 3,501; 0 | 16,499; 0 | 0.5312 ± 0.0533 (0.5296; 0.4984–0.5630) | 0.4704 ± 0.0939 (0.4872; 0.3998–0.5359) | +0.06086 (+0.05864, +0.06316) | +0.690 | 0.695 (+0.391) | 0.332 |
+| GC fraction | Fungi | 3,419; 0 | 10,487; 0 | 0.5316 ± 0.0530 (0.5299; 0.4992–0.5632) | 0.5090 ± 0.0678 (0.5115; 0.4765–0.5490) | +0.02262 (+0.02034, +0.02479) | +0.351 | 0.602 (+0.203) | 0.158 |
+| GC fraction | Metazoa | 82; 0 | 6,012; 0 | 0.5159 ± 0.0638 (0.5135; 0.4791–0.5591) | 0.4030 ± 0.0952 (0.3830; 0.3398–0.4526) | +0.11289 (+0.09884, +0.12627) | +1.191 | 0.835 (+0.670) | 0.636 |
+| Shannon entropy | All | 3,501; 0 | 16,499; 0 | 1.9825 ± 0.0223 (1.9902; 1.9784–1.9959) | 1.9640 ± 0.0471 (1.9815; 1.9507–1.9935) | +0.01847 (+0.01742, +0.01940) | +0.422 | 0.634 (+0.267) | 0.213 |
+| Shannon entropy | Fungi | 3,419; 0 | 10,487; 0 | 1.9827 ± 0.0219 (1.9903; 1.9786–1.9959) | 1.9784 ± 0.0323 (1.9892; 1.9751–1.9955) | +0.00433 (+0.00330, +0.00531) | +0.144 | 0.529 (+0.058) | 0.043 |
+| Shannon entropy | Metazoa | 82; 0 | 6,012; 0 | 1.9743 ± 0.0319 (1.9845; 1.9715–1.9933) | 1.9390 ± 0.0574 (1.9509; 1.9192–1.9771) | +0.03527 (+0.02772, +0.04250) | +0.618 | 0.755 (+0.510) | 0.459 |
+
+There were no formal hypothesis tests or p values; the six comparisons are effect summaries. Therefore no significance claim is made and no multiple-testing adjustment is relevant to a test decision. The bootstrap confidence intervals are unadjusted descriptive intervals for mean differences. The AUC, rank-biserial, SMD, and KS D are point estimates without confidence intervals in this report.
+
+## Interpretation by question
+
+1. **Does the candidate differ in GC content?** Yes descriptively. Across all points, its mean is 0.0609 higher (about 6.1 percentage points), SMD 0.69, and AUC 0.695. Distributional separation is appreciable but far from complete: the value ranges overlap substantially and KS D is 0.332.
+2. **Does it differ in Shannon entropy?** Across all points there is a higher candidate mean (+0.0185, SMD 0.42, AUC 0.634), but this is a small shift relative to the feature's narrow range. It is not a cleanly separated distribution.
+3. **Do differences persist within Fungi?** Yes for GC, but attenuated: +0.0226 (2.26 percentage points), SMD 0.35, AUC 0.602, KS D 0.158. This suggests the overall GC association is not solely due to the candidate's Fungi/Metazoa mix. Entropy within Fungi is much smaller (+0.00433, SMD 0.144, AUC 0.529, KS D 0.043), indicating extensive overlap and weak practical separation.
+4. **Is the evidence consistent with a composition-associated explanation?** It is consistent with GC-associated structure, including within Fungi, and weakly consistent with an entropy shift overall. It does not show that either property generated the UMAP region. Kingdom composition may explain part of the overall contrast: the candidate is 97.66% Fungi versus 63.56% Fungi among non-candidate points. However, a within-Fungi GC difference remains. No multivariable model tested how much composition statistically accounts for kingdom membership or UMAP membership, and no causal conclusion is warranted.
+5. **What competing explanations remain?** Independent PCA/UMAP transformations, nonlinear projection and density effects, other sequence attributes (length, gene type/coding status), exact sequence duplication, taxonomy below kingdom, sampling, and dependence among intervals from the same records or sources. The current report tests only GC and entropy. The observed component's failure to remain distinct in the whitened projection is also evidence that its visible isolation is representation-sensitive.
+6. **Does this justify likelihood or duplication investigation next?** Yes, as a targeted descriptive follow-up, especially because composition does not fully account for the within-Fungi GC shift and does not establish the reason for the raw-UMAP geometry. Next inspect the candidate's likelihood profile, then duplication only in a later task. This is a next-investigation recommendation, not evidence that either factor explains the region.
+
+## Uncertainty and limitations
+
+The nominal bootstrap treats sampled intervals as independent. That assumption is not established: intervals may overlap, share records/genomes, or be exact sequence duplicates. Row-level bootstrap intervals can consequently be too narrow. The 82-point candidate Metazoa stratum is small and may be unrepresentative; its large estimated effects should be treated cautiously despite the displayed nominal intervals. Within-Fungi comparisons are better supported by count but still subject to clustered sampling.
+
+Kingdom stratification only addresses broad Fungi/Metazoa composition; it does not control for finer taxonomy, record/source, length, gene type, duplicate sequence identity, or other confounders. The plot's color values are the underlying composition data available locally, but plot07 lacks embedded interval IDs, requiring a validated coordinate join. No original 3,072-dimensional embeddings are available locally. UMAP distances are not evolutionary distances, and these descriptive associations cannot establish biological population structure or causality.
